@@ -399,7 +399,7 @@ impl BpmAnalyzer {
         let half_lag = initial_lag / 2;
         if half_lag >= min_lag {
             let (best_half_lag, max_half_corr) = find_best_in_range(half_lag);
-            if max_half_corr > (initial_corr * 0.6) {
+            if max_half_corr > (initial_corr * 0.5) {
                 best_lag = best_half_lag;
             }
         }
