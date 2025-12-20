@@ -17,6 +17,7 @@ pub struct AnalysisResult {
     pub coarse_confidence: f32,
     pub energy: f32,
     pub average_energy: f32,
+    pub beat_offset: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -528,6 +529,7 @@ impl BpmAnalyzer {
             coarse_confidence: 0.0,
             energy: 0.0,
             average_energy: 0.0,
+            beat_offset: None,
         };
 
         // 1. Filtrage et Downsampling (Input -> Fine)
@@ -696,6 +698,24 @@ impl BpmAnalyzer {
             bpm
         };
 
+        // Calcul de l'offset précis du beat (Latence)
+        let mut max_energy = 0.0;
+        let mut max_energy_index = 0;
+        for (i, &val) in self.scratch_fine_vec.iter().enumerate() {
+            if val > max_energy {
+                max_energy = val;
+                max_energy_index = i;
+            }
+        }
+
+        let samples_since_peak = self
+            .scratch_fine_vec
+            .len()
+            .saturating_sub(1)
+            .saturating_sub(max_energy_index);
+        let latency_seconds = samples_since_peak as f32 / self.fine_config.rate;
+        let beat_offset = Some(Duration::from_secs_f32(latency_seconds));
+
         AnalysisResult {
             bpm: smoothed_bpm,
             coarse_confidence: coarse_conf,
@@ -703,6 +723,7 @@ impl BpmAnalyzer {
             confidence,
             energy: norm_res_fine.energy_mean,
             average_energy: avg_history_energy,
+            beat_offset,
         }
     }
 }

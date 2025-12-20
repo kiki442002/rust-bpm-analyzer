@@ -7,12 +7,13 @@ use core_bpm::audio::AudioMessage;
 use network_sync::LinkManager;
 use std::sync::mpsc;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting BPM Analyzer...");
 
     let (sender, receiver) = mpsc::channel();
+    let mut last_sync_time = Instant::now();
 
     // Configuration based on target architecture
     #[cfg(target_arch = "riscv64")]
@@ -73,6 +74,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Sync Ableton Link
                         if result.bpm > 0.0 {
                             link_manager.update_tempo(result.bpm as f64);
+                        }
+
+                        // Sync Phase on Drop (with 10s cooldown)
+                        if result.is_drop && last_sync_time.elapsed().as_secs() > 10 {
+                            if let Some(offset) = result.beat_offset {
+                                println!(
+                                    "Drop detected! Syncing Downbeat (latency: {:?})...",
+                                    offset
+                                );
+                                link_manager.sync_downbeat(offset);
+                                last_sync_time = Instant::now();
+                            }
                         }
                     }
 

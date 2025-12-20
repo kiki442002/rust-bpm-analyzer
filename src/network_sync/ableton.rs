@@ -1,4 +1,5 @@
 use rusty_link::{AblLink, SessionState};
+use std::time::Duration;
 
 pub struct LinkManager {
     link: AblLink,
@@ -25,6 +26,18 @@ impl LinkManager {
             self.session_state.set_tempo(bpm, time);
             self.link.commit_app_session_state(&self.session_state);
         }
+    }
+
+    pub fn sync_downbeat(&mut self, latency: Duration) {
+        self.link.capture_app_session_state(&mut self.session_state);
+        let time = self.link.clock_micros();
+
+        let latency_micros = latency.as_micros() as i64;
+        let target_time = time - latency_micros;
+
+        self.session_state
+            .request_beat_at_time(0.0, target_time, 4.0);
+        self.link.commit_app_session_state(&self.session_state);
     }
 
     pub fn link_state(&mut self, enable: bool) {
