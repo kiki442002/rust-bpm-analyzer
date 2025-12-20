@@ -4,7 +4,6 @@ mod core_bpm;
 use core_bpm::AudioCapture;
 use core_bpm::BpmAnalyzer;
 use core_bpm::audio::AudioMessage;
-use std::collections::VecDeque;
 use std::sync::mpsc;
 
 use std::time::Duration;
@@ -21,16 +20,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(not(target_arch = "riscv64"))]
     const SAMPLE_RATE: u32 = 44100; // Development (Mac/PC)
 
-    const WINDOW_SIZE: usize = (SAMPLE_RATE as usize) * 4; // 4 seconds window
     const HOP_SIZE: usize = SAMPLE_RATE as usize; // Update every 1 second
 
-    // Circular buffer to store audio samples
-    let mut audio_buffer: VecDeque<f32> = VecDeque::with_capacity(WINDOW_SIZE);
     // Temporary buffer to collect new samples until we reach HOP_SIZE
     let mut new_samples_accumulator: Vec<f32> = Vec::with_capacity(HOP_SIZE);
 
     // Initialize BPM Analyzer
-    let mut analyzer = BpmAnalyzer::new(SAMPLE_RATE)?;
+    let mut analyzer = BpmAnalyzer::new(SAMPLE_RATE, None)?;
 
     // Use default device (None) and default restart policy (None)
     // Request a buffer size of 500ms to reduce latency
@@ -70,18 +66,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                     }
 
-                    // Add them to the main sliding window
-                    audio_buffer.extend(new_samples_accumulator.drain(..));
-
-                    // Keep the window size constant (remove old samples)
-                    while audio_buffer.len() > WINDOW_SIZE {
-                        audio_buffer.pop_front();
-                    }
+                    // Clear accumulator for next batch
+                    new_samples_accumulator.clear();
                 }
             }
             Ok(AudioMessage::Reset) => {
                 println!("Audio stream reset. Clearing buffers...");
-                audio_buffer.clear();
                 new_samples_accumulator.clear();
             }
             Err(e) => {

@@ -1,13 +1,12 @@
 use biquad::*;
 use std::collections::VecDeque;
-use std::sync::mpsc::RecvTimeoutError;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy)]
 struct BpmHistoryEntry {
     bpm: f32,
     energy: f32,
-    _timestamp: Instant,
+    timestamp: Instant,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -20,83 +19,247 @@ pub struct AnalysisResult {
     pub average_energy: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct NormalizationResult {
+    pub energy_sum: f32,
+    pub energy_mean: f32,
+    pub raw_max: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BpmAnalyzerConfig {
+    pub window_duration: Duration,
+    pub min_bpm: f32,
+    pub max_bpm: f32,
+    pub thresholds: ConfidenceThreshold,
+}
+
+impl Default for BpmAnalyzerConfig {
+    fn default() -> Self {
+        Self {
+            window_duration: Duration::from_secs(4),
+            min_bpm: 60.0,
+            max_bpm: 310.0,
+            thresholds: ConfidenceThreshold {
+                fine_confidence: 0.3,
+                coarse_confidence: 0.4,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
+pub enum FilterType {
+    LowPass(f32),       // Cutoff
+    HighPass(f32),      // Cutoff
+    BandPass(f32, f32), // Low Cutoff, High Cutoff
+}
+
+#[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
+pub enum FilterOrder {
+    Order2,
+    Order4,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct ConfidenceThreshold {
+    pub fine_confidence: f32,
+    pub coarse_confidence: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct SamplingConfig {
+    pub buffer: VecDeque<f32>,
+    pub rate: f32,
+    pub step: usize,
+    pub min_lag: usize,
+    pub max_lag: usize,
+}
+impl SamplingConfig {
+    pub fn new(rate: f32, duration: Duration, step: usize, min_bpm: f32, max_bpm: f32) -> Self {
+        let capacity = (rate * duration.as_secs_f32()) as usize;
+        let min_lag = (rate * 60.0 / max_bpm) as usize;
+        let max_lag = (rate * 60.0 / min_bpm) as usize;
+
+        Self {
+            buffer: VecDeque::with_capacity(capacity),
+            rate,
+            step,
+            min_lag,
+            max_lag,
+        }
+    }
+
+    pub fn update_buffer<F>(&mut self, samples: &[f32], output: &mut Vec<f32>, mut transform: F)
+    where
+        F: FnMut(&[f32]) -> f32,
+    {
+        output.clear();
+
+        for chunk in samples.chunks(self.step) {
+            let val = transform(chunk);
+            output.push(val);
+        }
+
+        for &sample in output.iter() {
+            if self.buffer.len() >= self.buffer.capacity() {
+                self.buffer.pop_front();
+            }
+            self.buffer.push_back(sample);
+        }
+    }
+}
+
+pub struct AudioFilter {
+    chain: Vec<DirectForm2Transposed<f32>>,
+}
+
+impl AudioFilter {
+    pub fn new(
+        filter_type: FilterType,
+        sample_rate: f32,
+        order: FilterOrder,
+    ) -> Result<Self, String> {
+        let mut chain = Vec::new();
+
+        // L'ordre doit être un multiple de 2 car chaque section biquad est d'ordre 2
+        // Si order = 2 -> 1 section
+        // Si order = 4 -> 2 sections
+        let sections_count = match order {
+            FilterOrder::Order2 => 1,
+            FilterOrder::Order4 => 2,
+        };
+
+        for _ in 0..sections_count {
+            match filter_type {
+                FilterType::LowPass(cutoff) => {
+                    let coeffs = Coefficients::<f32>::from_params(
+                        Type::LowPass,
+                        Hertz::<f32>::from_hz(sample_rate).unwrap(),
+                        Hertz::<f32>::from_hz(cutoff).unwrap(),
+                        Q_BUTTERWORTH_F32,
+                    )
+                    .map_err(|e| format!("LP Error: {:?}", e))?;
+                    chain.push(DirectForm2Transposed::<f32>::new(coeffs));
+                }
+                FilterType::HighPass(cutoff) => {
+                    let coeffs = Coefficients::<f32>::from_params(
+                        Type::HighPass,
+                        Hertz::<f32>::from_hz(sample_rate).unwrap(),
+                        Hertz::<f32>::from_hz(cutoff).unwrap(),
+                        Q_BUTTERWORTH_F32,
+                    )
+                    .map_err(|e| format!("HP Error: {:?}", e))?;
+                    chain.push(DirectForm2Transposed::<f32>::new(coeffs));
+                }
+                FilterType::BandPass(low, high) => {
+                    // BandPass = HighPass suivi de LowPass
+                    // Pour un ordre 2 demandé, on met 1 HP et 1 LP (total ordre 4 en réalité, mais standard pour BP)
+
+                    let hp_coeffs = Coefficients::<f32>::from_params(
+                        Type::HighPass,
+                        Hertz::<f32>::from_hz(sample_rate).unwrap(),
+                        Hertz::<f32>::from_hz(low).unwrap(),
+                        Q_BUTTERWORTH_F32,
+                    )
+                    .map_err(|e| format!("BP-HP Error: {:?}", e))?;
+
+                    let lp_coeffs = Coefficients::<f32>::from_params(
+                        Type::LowPass,
+                        Hertz::<f32>::from_hz(sample_rate).unwrap(),
+                        Hertz::<f32>::from_hz(high).unwrap(),
+                        Q_BUTTERWORTH_F32,
+                    )
+                    .map_err(|e| format!("BP-LP Error: {:?}", e))?;
+
+                    chain.push(DirectForm2Transposed::<f32>::new(hp_coeffs));
+                    chain.push(DirectForm2Transposed::<f32>::new(lp_coeffs));
+                }
+            }
+        }
+
+        Ok(Self { chain })
+    }
+    fn process(&mut self, sample: f32) -> f32 {
+        let mut out = sample;
+        for filter in &mut self.chain {
+            out = filter.run(out);
+        }
+        out
+    }
+}
+
 pub struct BpmAnalyzer {
-    // Buffers
-    coarse_buffer: VecDeque<f32>,
-    fine_buffer: VecDeque<f32>,
+    // Configuration
+    pub config: BpmAnalyzerConfig,
 
     // Historique structuré (BPM, Energie, Temps)
     history: VecDeque<BpmHistoryEntry>,
-    last_detection_time: Instant,
 
-    // Rates
-    coarse_rate: f32,
-    fine_rate: f32,
+    // Sampling Configs (Buffers + Rates)
+    fine_config: SamplingConfig,
+    coarse_config: SamplingConfig,
 
-    // Downsampling steps
-    fine_step: usize,
-    coarse_step: usize,
-
-    // Filtres (Passe-Haut + Passe-Bas)
-    filter1: DirectForm2Transposed<f32>,
-    filter2: DirectForm2Transposed<f32>,
-
-    // Seuils
-    pub min_confidence: f32,
-    pub min_coarse_confidence: f32,
-    pub average_energy: f32, // Moyenne glissante de l'énergie (interne)
+    // Filtre Principal
+    input_filter: AudioFilter,
 
     // Reference BPM (Lock sur Drop)
     reference_bpm: f32,
+
+    // Scratch buffers for memory optimization
+    scratch_fine_vec: Vec<f32>,
+    scratch_fine_centered: Vec<f32>,
+    scratch_coarse_vec: Vec<f32>,
+    scratch_coarse_centered: Vec<f32>,
+    scratch_processing: Vec<f32>,
+    scratch_bpm_sort: Vec<f32>,
 }
 
 impl BpmAnalyzer {
-    pub fn new(sample_rate: u32) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(
+        sample_rate: u32,
+        config: Option<BpmAnalyzerConfig>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let config = config.unwrap_or_default();
+
         // Stratégie Coarse-Fine
         // Fine Rate : ~11000 Hz (Compromis Précision/CPU)
         // Coarse Rate : ~500 Hz (Recherche rapide)
 
-        // Pour 44100Hz : Step 4 => 11025 Hz. Pour 16000Hz : Step 2 => 8000 Hz.
-        let fine_step = if sample_rate >= 44100 { 4 } else { 2 };
+        // Pour 44100Hz : Step 4 => 11025 Hz. Pour 110025Hz : Step 1 => 110025Hz Hz.
+        let fine_step = if sample_rate >= 44100 { 4 } else { 1 };
 
         // Pour garder ~500Hz en Coarse :
         // 11025 / 22 ~= 501 Hz.
         // 8000 / 16 = 500 Hz.
-        let coarse_step = if sample_rate >= 44100 { 22 } else { 16 };
+        let coarse_step = 22;
 
         let fine_rate = sample_rate as f32 / fine_step as f32;
         let coarse_rate = fine_rate / coarse_step as f32;
+        let window_duration = config.window_duration;
 
-        let window_duration = 4.0; // 4 secondes d'historique
+        let fine_config = SamplingConfig::new(
+            fine_rate,
+            window_duration,
+            fine_step,
+            config.min_bpm,
+            config.max_bpm,
+        );
+        let coarse_config = SamplingConfig::new(
+            coarse_rate,
+            window_duration,
+            coarse_step,
+            config.min_bpm,
+            config.max_bpm,
+        );
 
-        let coarse_capacity = (coarse_rate * window_duration) as usize;
-        let fine_capacity = (fine_rate * window_duration) as usize;
-
-        // Configuration des filtres : BandPass 30Hz - 800Hz
-        // Filter 1: HighPass 30Hz (Order 2) - Laisse passer les Sub-Bass (808, etc.)
-        // Filter 2: LowPass 800Hz (Order 2) - Garde Kick/Snare, supprime Hi-Hats
-
-        let hp_freq = 50.0;
-        let lp_freq = 250.0;
-
-        let hp_coeffs = Coefficients::<f32>::from_params(
-            Type::HighPass,
-            Hertz::<f32>::from_hz(sample_rate as f32).unwrap(),
-            Hertz::<f32>::from_hz(hp_freq).unwrap(),
-            Q_BUTTERWORTH_F32,
-        )
-        .map_err(|e| format!("Failed to create HP coefficients: {:?}", e))?;
-
-        let lp_coeffs = Coefficients::<f32>::from_params(
-            Type::LowPass,
-            Hertz::<f32>::from_hz(sample_rate as f32).unwrap(),
-            Hertz::<f32>::from_hz(lp_freq).unwrap(),
-            Q_BUTTERWORTH_F32,
-        )
-        .map_err(|e| format!("Failed to create LP coefficients: {:?}", e))?;
-
-        let filter1 = DirectForm2Transposed::<f32>::new(hp_coeffs);
-        let filter2 = DirectForm2Transposed::<f32>::new(lp_coeffs);
+        // Configuration du filtre principal : BandPass 50Hz - 250Hz
+        let input_filter = AudioFilter::new(
+            FilterType::BandPass(50.0, 250.0),
+            sample_rate as f32,
+            FilterOrder::Order4,
+        )?;
 
         println!("BPM Analyzer Configured:");
         println!("  Sample Rate: {} Hz", sample_rate);
@@ -107,21 +270,254 @@ impl BpmAnalyzer {
         );
 
         Ok(Self {
-            coarse_buffer: VecDeque::with_capacity(coarse_capacity),
-            fine_buffer: VecDeque::with_capacity(fine_capacity),
+            config,
             history: VecDeque::with_capacity(5),
-            last_detection_time: Instant::now(),
-            coarse_rate,
-            fine_rate,
-            fine_step,
-            coarse_step,
-            filter1,
-            filter2,
-            min_confidence: 0.3,
-            min_coarse_confidence: 0.4,
-            average_energy: 0.0, // Initialisation
+            fine_config,
+            coarse_config,
+            input_filter,
             reference_bpm: 0.0,
+            scratch_fine_vec: Vec::with_capacity(4096),
+            scratch_fine_centered: Vec::with_capacity(4096),
+            scratch_coarse_vec: Vec::with_capacity(1024),
+            scratch_coarse_centered: Vec::with_capacity(1024),
+            scratch_processing: Vec::with_capacity(1024),
+            scratch_bpm_sort: Vec::with_capacity(5),
         })
+    }
+
+    fn normalize_window(
+        buffer: &VecDeque<f32>,
+        out_vec: &mut Vec<f32>,
+        out_centered: &mut Vec<f32>,
+    ) -> NormalizationResult {
+        out_vec.clear();
+        out_vec.extend(buffer.iter());
+
+        // 1. Find Max
+        let raw_max = out_vec.iter().cloned().fold(0.0 / 0.0, f32::max);
+
+        // 2. Normalize to 0..1
+        if raw_max > 0.0 {
+            for x in out_vec.iter_mut() {
+                *x /= raw_max;
+            }
+        }
+
+        // 3. Center (Remove DC offset)
+        let mean: f32 = out_vec.iter().sum::<f32>() / out_vec.len() as f32;
+
+        out_centered.clear();
+        out_centered.extend(out_vec.iter().map(|x| x - mean));
+
+        // 4. Calculate Energy
+        let energy_sum: f32 = out_centered.iter().map(|x| x * x).sum();
+        let energy_mean = if !out_centered.is_empty() {
+            energy_sum / out_centered.len() as f32
+        } else {
+            0.0
+        };
+
+        NormalizationResult {
+            energy_sum,
+            energy_mean,
+            raw_max,
+        }
+    }
+
+    fn search_correlation(
+        &self,
+        centered_signal: &[f32],
+        energy: f32,
+        min_lag: usize,
+        max_lag: usize,
+        min_confidence: f32,
+    ) -> Result<(usize, f32, f32), &'static str> {
+        let safe_max_lag = centered_signal.len().saturating_sub(1);
+        let start_lag = min_lag.max(1);
+        let end_lag = max_lag.min(safe_max_lag);
+
+        let mut best_lag = 0;
+        let mut max_corr = 0.0;
+
+        for lag in start_lag..=end_lag {
+            let mut corr = 0.0;
+            for i in 0..(centered_signal.len() - lag) {
+                corr += centered_signal[i] * centered_signal[i + lag];
+            }
+            if corr > max_corr {
+                max_corr = corr;
+                best_lag = lag;
+            }
+        }
+
+        if best_lag == 0 {
+            return Err("No correlation found");
+        }
+
+        let confidence = if energy > 0.0 { max_corr / energy } else { 0.0 };
+
+        if confidence < min_confidence {
+            return Err("Confidence too low");
+        }
+
+        Ok((best_lag, confidence, max_corr))
+    }
+
+    fn check_harmonics(
+        &self,
+        initial_lag: usize,
+        initial_corr: f32,
+        centered_signal: &[f32],
+        min_lag: usize,
+    ) -> usize {
+        let mut best_lag = initial_lag;
+
+        // Helper closure for local search
+        let find_best_in_range = |center_lag: usize| -> (usize, f32) {
+            let start = center_lag.saturating_sub(1);
+            let end = center_lag + 1;
+            let mut max_c = 0.0;
+            let mut best_l = 0;
+
+            for lag in start..=end {
+                if lag >= centered_signal.len() {
+                    continue;
+                }
+                let mut corr = 0.0;
+                for i in 0..(centered_signal.len() - lag) {
+                    corr += centered_signal[i] * centered_signal[i + lag];
+                }
+                if corr > max_c {
+                    max_c = corr;
+                    best_l = lag;
+                }
+            }
+            (best_l, max_c)
+        };
+
+        // 1. Check 2x BPM (Half Lag)
+        let half_lag = initial_lag / 2;
+        if half_lag >= min_lag {
+            let (best_half_lag, max_half_corr) = find_best_in_range(half_lag);
+            if max_half_corr > (initial_corr * 0.6) {
+                best_lag = best_half_lag;
+            }
+        }
+
+        // 2. Check 3x BPM (Third Lag)
+        let third_lag = initial_lag / 3;
+        if third_lag >= min_lag {
+            let (best_third_lag, max_third_corr) = find_best_in_range(third_lag);
+            if max_third_corr > (initial_corr * 0.6) {
+                best_lag = best_third_lag;
+            }
+        }
+
+        best_lag
+    }
+
+    fn parabolic_interpolation(
+        &self,
+        best_lag: usize,
+        max_corr: f32,
+        centered_signal: &[f32],
+        start_lag: usize,
+        end_lag: usize,
+    ) -> f32 {
+        let mut refined_lag = best_lag as f32;
+
+        if best_lag > start_lag && best_lag < end_lag {
+            let calc_corr = |l: usize| -> f32 {
+                let mut c = 0.0;
+                for i in 0..(centered_signal.len() - l) {
+                    c += centered_signal[i] * centered_signal[i + l];
+                }
+                c
+            };
+
+            let y_prev = calc_corr(best_lag - 1);
+            let y_curr = max_corr;
+            let y_next = calc_corr(best_lag + 1);
+
+            let denominator = 2.0 * (y_prev - 2.0 * y_curr + y_next);
+            if denominator.abs() > 0.0001 {
+                let offset = (y_prev - y_next) / denominator;
+                refined_lag = best_lag as f32 + offset;
+            }
+        }
+        refined_lag
+    }
+
+    fn check_energy_threshold(&self, current_energy: f32) -> Option<f32> {
+        // Calcul de l'énergie moyenne actuelle de l'historique
+        let avg_history_energy = if self.history.is_empty() {
+            0.0
+        } else {
+            self.history.iter().map(|e| e.energy).sum::<f32>() / self.history.len() as f32
+        };
+
+        // Adaptive Energy Threshold (Gate)
+        if !self.history.is_empty()
+            && current_energy < (avg_history_energy * 0.9)
+            && current_energy < 0.03
+        {
+            return None;
+        }
+
+        Some(avg_history_energy)
+    }
+
+    fn check_drop(&self, samples: &[f32], threshold: Option<f32>) -> bool {
+        let split_index = (samples.len() * 3) / 4; // 75% du buffer
+
+        let threshold = threshold.unwrap_or(1.3);
+
+        // 1. Énergie de l'historique (0..75%)
+        let mut history_sum_sq = 0.0;
+        for i in 0..split_index {
+            let val = samples[i];
+            history_sum_sq += val * val;
+        }
+        let history_count = split_index.max(1);
+        let history_energy = history_sum_sq / history_count as f32;
+
+        // 2. Énergie récente (75%..100%)
+        let mut recent_sum_sq = 0.0;
+        for i in split_index..samples.len() {
+            let val = samples[i];
+            recent_sum_sq += val * val;
+        }
+        let recent_count = (samples.len() - split_index).max(1);
+        let current_energy = recent_sum_sq / recent_count as f32;
+
+        // 3. Détection
+        (current_energy > history_energy * threshold) && (current_energy > 0.01)
+    }
+
+    fn update_and_check_reference(&mut self, bpm: f32, is_drop: bool) -> bool {
+        if is_drop {
+            // Si c'est un Drop, on met à jour la référence
+            self.reference_bpm = bpm;
+            true
+        } else if self.reference_bpm > 0.0 {
+            // Si ce n'est pas un Drop mais qu'on a une référence, on vérifie la cohérence
+            let test_ref = self.reference_bpm * 0.1;
+            let is_close = (bpm - self.reference_bpm).abs() <= test_ref;
+            // Vérification des harmoniques (x2, /2, x3)
+            let is_double = (bpm - self.reference_bpm * 2.0).abs() <= test_ref / 2.0;
+            let is_half = (bpm - self.reference_bpm / 2.0).abs() <= test_ref * 2.0;
+            let is_triple = (bpm - self.reference_bpm * 3.0).abs() <= test_ref / 3.0;
+
+            if !is_close && !is_double && !is_half && !is_triple {
+                // BPM incohérent avec la référence -> On ignore cette détection
+                false
+            } else {
+                true
+            }
+        } else {
+            // Pas de référence encore, on ignore
+            false
+        }
     }
 
     pub fn process(&mut self, new_samples: &[f32]) -> AnalysisResult {
@@ -131,46 +527,35 @@ impl BpmAnalyzer {
             confidence: 0.0,
             coarse_confidence: 0.0,
             energy: 0.0,
-            average_energy: self.average_energy,
+            average_energy: 0.0,
         };
 
         // 1. Filtrage et Downsampling (Input -> Fine)
-        let mut fine_chunk_accum = Vec::with_capacity(new_samples.len() / self.fine_step);
-
-        for chunk in new_samples.chunks(self.fine_step) {
-            let mut sum = 0.0;
-            for &x in chunk {
-                // Application du filtre d'ordre 4
-                let y1 = self.filter1.run(x);
-                let y2 = self.filter2.run(y1);
-                sum += y2.abs(); // Rectification
-            }
-            let avg = sum / chunk.len() as f32;
-            fine_chunk_accum.push(avg);
-        }
-
-        // Mise à jour du buffer Fine
-        for &sample in &fine_chunk_accum {
-            if self.fine_buffer.len() >= self.fine_buffer.capacity() {
-                self.fine_buffer.pop_front();
-            }
-            self.fine_buffer.push_back(sample);
-        }
+        self.fine_config
+            .update_buffer(new_samples, &mut self.scratch_processing, |chunk| {
+                let mut sum = 0.0;
+                for &x in chunk {
+                    // Application du filtre
+                    let y = self.input_filter.process(x);
+                    sum += y.abs(); // Rectification
+                }
+                sum / chunk.len() as f32
+            });
 
         // 2. Downsampling (Fine -> Coarse)
-        // On traite uniquement les nouveaux échantillons Fine
-        for chunk in fine_chunk_accum.chunks(self.coarse_step) {
-            let sum: f32 = chunk.iter().sum();
-            let avg = sum / chunk.len() as f32;
+        // On utilise scratch_coarse_vec comme buffer temporaire pour la sortie de cette étape
+        // car il sera écrasé lors de la normalisation coarse juste après.
+        self.coarse_config.update_buffer(
+            &self.scratch_processing,
+            &mut self.scratch_coarse_vec,
+            |chunk| {
+                let sum: f32 = chunk.iter().sum();
+                sum / chunk.len() as f32
+            },
+        );
 
-            if self.coarse_buffer.len() >= self.coarse_buffer.capacity() {
-                self.coarse_buffer.pop_front();
-            }
-            self.coarse_buffer.push_back(avg);
-        }
-
-        // Il nous faut au moins 2 secondes de données
-        if self.coarse_buffer.len() < (self.coarse_rate * 2.0) as usize {
+        // On attend que le buffer soit plein
+        if self.coarse_config.buffer.len() < self.coarse_config.buffer.capacity() {
             return empty_result;
         }
 
@@ -178,300 +563,112 @@ impl BpmAnalyzer {
         // ÉTAPE 1 : RECHERCHE GROSSIÈRE (COARSE)
         // ============================================================
 
-        let mut coarse_vec: Vec<f32> = self.coarse_buffer.iter().cloned().collect();
+        let norm_res_coarse = Self::normalize_window(
+            &self.coarse_config.buffer,
+            &mut self.scratch_coarse_vec,
+            &mut self.scratch_coarse_centered,
+        );
 
-        // Normalisation de la fenêtre Coarse (0..1)
-        let max_c = coarse_vec.iter().cloned().fold(0.0 / 0.0, f32::max);
-        if max_c > 0.0 {
-            for x in &mut coarse_vec {
-                *x /= max_c;
-            }
-        }
-
-        let coarse_mean: f32 = coarse_vec.iter().sum::<f32>() / coarse_vec.len() as f32;
-        let coarse_centered: Vec<f32> = coarse_vec.iter().map(|x| x - coarse_mean).collect();
-        let coarse_energy: f32 = coarse_centered.iter().map(|x| x * x).sum();
-
-        // Plage de recherche : 60 à 310 BPM
-        let min_bpm = 60.0;
-        let max_bpm = 310.0;
-
-        let min_lag_c = (self.coarse_rate * 60.0 / max_bpm) as usize;
-        let max_lag_c = (self.coarse_rate * 60.0 / min_bpm) as usize;
-
-        let mut best_lag_c = 0;
-        let mut max_corr_c = 0.0;
-
-        for lag in min_lag_c..=max_lag_c {
-            let mut corr = 0.0;
-            for i in 0..(coarse_centered.len() - lag) {
-                corr += coarse_centered[i] * coarse_centered[i + lag];
-            }
-            if corr > max_corr_c {
-                max_corr_c = corr;
-                best_lag_c = lag;
-            }
-        }
-
-        if best_lag_c == 0 {
+        if norm_res_coarse.energy_mean <= 0.001 {
             return empty_result;
         }
 
-        let mut coarse_conf = 0.0;
-
-        // Vérification de la confiance Coarse (Permissive)
-        if coarse_energy > 0.001 {
-            coarse_conf = max_corr_c / coarse_energy;
-            if coarse_conf < self.min_coarse_confidence {
-                // Signal trop faible ou trop bruité même pour une recherche grossière
-                return empty_result;
-            }
-        } else {
-            return empty_result; // Silence
-        }
+        let (best_lag_c, coarse_conf, max_corr_c) = match self.search_correlation(
+            &self.scratch_coarse_centered,
+            norm_res_coarse.energy_sum,
+            self.coarse_config.min_lag,
+            self.coarse_config.max_lag,
+            self.config.thresholds.coarse_confidence,
+        ) {
+            Ok(res) => res,
+            Err(_) => return empty_result,
+        };
 
         // Correction d'octave (Harmonic Check)
-        // On vérifie les harmoniques rapides (2x et 3x BPM)
-        // On privilégie toujours le tempo le plus rapide si une corrélation significative existe.
-
-        let initial_lag = best_lag_c;
-        let initial_corr = max_corr_c;
-
-        // 1. Check 2x BPM (Half Lag)
-        let half_lag = initial_lag / 2;
-        if half_lag >= min_lag_c {
-            let mut max_half_corr = 0.0;
-            let mut best_half_lag = 0;
-
-            for lag in (half_lag.saturating_sub(1))..=(half_lag + 1) {
-                let mut corr = 0.0;
-                for i in 0..(coarse_centered.len() - lag) {
-                    corr += coarse_centered[i] * coarse_centered[i + lag];
-                }
-                if corr > max_half_corr {
-                    max_half_corr = corr;
-                    best_half_lag = lag;
-                }
-            }
-
-            // Seuil abaissé à 40% : Si l'harmonique 2x est présente, on la prend.
-            if max_half_corr > (initial_corr * 0.4) {
-                best_lag_c = best_half_lag;
-                // On met à jour max_corr_c pour que le check 3x puisse comparer avec le "gagnant" actuel si besoin
-                // Mais ici on compare toujours à l'initial pour le seuil relatif
-            }
-        }
-
-        // 2. Check 3x BPM (Third Lag) - Ex: 66.7 -> 200 BPM
-        let third_lag = initial_lag / 3;
-        if third_lag >= min_lag_c {
-            let mut max_third_corr = 0.0;
-            let mut best_third_lag = 0;
-
-            for lag in (third_lag.saturating_sub(1))..=(third_lag + 1) {
-                let mut corr = 0.0;
-                for i in 0..(coarse_centered.len() - lag) {
-                    corr += coarse_centered[i] * coarse_centered[i + lag];
-                }
-                if corr > max_third_corr {
-                    max_third_corr = corr;
-                    best_third_lag = lag;
-                }
-            }
-
-            // Seuil abaissé à 30% : Très agressif pour récupérer les tempos rapides (DnB/Hardcore)
-            // Si on a trouvé un candidat 3x valide, il écrase le candidat 2x ou 1x.
-            if max_third_corr > (initial_corr * 0.3) {
-                best_lag_c = best_third_lag;
-            }
-        }
+        let best_lag_c = self.check_harmonics(
+            best_lag_c,
+            max_corr_c,
+            &self.scratch_coarse_centered,
+            self.coarse_config.min_lag,
+        );
         // ============================================================
         // ÉTAPE 2 : RAFFINEMENT (FINE)
         // ============================================================
 
         // Conversion du Lag Coarse vers Fine
         // Ratio = fine_rate / coarse_rate = coarse_step
-        let center_lag_f = best_lag_c * self.coarse_step;
+        let center_lag_f = best_lag_c * self.coarse_config.step;
 
-        // Fenêtre de recherche Fine (+/- 50 samples pour couvrir la marge d'erreur avec le nouveau taux)
+        // Fenêtre de recherche Fine
         let search_radius = 50;
         let min_lag_f = center_lag_f.saturating_sub(search_radius);
         let max_lag_f = center_lag_f + search_radius;
 
-        let mut fine_vec: Vec<f32> = self.fine_buffer.iter().cloned().collect();
-
-        // Normalisation de la fenêtre Fine (0..1)
-        // On garde le max absolu pour le Noise Gate
-        let raw_max_f = fine_vec.iter().cloned().fold(0.0 / 0.0, f32::max);
-
-        if raw_max_f > 0.0 {
-            for x in &mut fine_vec {
-                *x /= raw_max_f;
-            }
-        }
-
-        let fine_mean: f32 = fine_vec.iter().sum::<f32>() / fine_vec.len() as f32;
-        let fine_centered: Vec<f32> = fine_vec.iter().map(|x| x - fine_mean).collect();
-        let fine_energy_sum: f32 = fine_centered.iter().map(|x| x * x).sum();
-        let fine_energy_mean = if !fine_centered.is_empty() {
-            fine_energy_sum / fine_centered.len() as f32
-        } else {
-            0.0
-        };
-
-        // Noise Gate : Si le signal brut est trop faible (< 1% du volume max possible), on ignore
-        if raw_max_f < 0.01 {
-            return empty_result;
-        }
-
-        // Seuil d'énergie minimale (basé sur la moyenne maintenant)
-        // 0.00001 est un seuil raisonnable pour une variance moyenne normalisée
-        if fine_energy_mean < 0.00001 {
-            return empty_result;
-        }
-
-        let mut best_lag_f = 0;
-        let mut max_corr_f = 0.0;
+        let norm_res_fine = Self::normalize_window(
+            &self.fine_config.buffer,
+            &mut self.scratch_fine_vec,
+            &mut self.scratch_fine_centered,
+        );
 
         // On s'assure de rester dans les bornes du buffer
-        let safe_max_lag = fine_centered.len().saturating_sub(1);
+        let safe_max_lag = self.scratch_fine_centered.len().saturating_sub(1);
         let start_lag = min_lag_f.max(1);
         let end_lag = max_lag_f.min(safe_max_lag);
 
-        for lag in start_lag..=end_lag {
-            let mut corr = 0.0;
-            for i in 0..(fine_centered.len() - lag) {
-                corr += fine_centered[i] * fine_centered[i + lag];
-            }
-            if corr > max_corr_f {
-                max_corr_f = corr;
-                best_lag_f = lag;
-            }
-        }
-
-        if best_lag_f == 0 {
-            return empty_result;
-        }
-
-        // Vérification de la confiance sur le signal Fine
-        // Confidence = Covariance / Variance (approximatif ici car lags différents, mais suffisant)
-        let confidence = if fine_energy_sum > 0.0 {
-            max_corr_f / fine_energy_sum
-        } else {
-            0.0
+        let (best_lag_f, confidence, max_corr_f) = match self.search_correlation(
+            &self.scratch_fine_centered,
+            norm_res_fine.energy_sum,
+            min_lag_f,
+            max_lag_f,
+            self.config.thresholds.fine_confidence,
+        ) {
+            Ok(res) => res,
+            Err(_) => return empty_result,
         };
-
-        if confidence < self.min_confidence {
-            return empty_result;
-        }
 
         // ============================================================
         // ÉTAPE 3 : INTERPOLATION PARABOLIQUE
         // ============================================================
 
-        let mut refined_lag = best_lag_f as f32;
+        let refined_lag = self.parabolic_interpolation(
+            best_lag_f,
+            max_corr_f,
+            &self.scratch_fine_centered,
+            start_lag,
+            end_lag,
+        );
 
-        if best_lag_f > start_lag && best_lag_f < end_lag {
-            let calc_corr = |l: usize| -> f32 {
-                let mut c = 0.0;
-                for i in 0..(fine_centered.len() - l) {
-                    c += fine_centered[i] * fine_centered[i + l];
-                }
-                c
-            };
-
-            let y_prev = calc_corr(best_lag_f - 1);
-            let y_curr = max_corr_f;
-            let y_next = calc_corr(best_lag_f + 1);
-
-            let denominator = 2.0 * (y_prev - 2.0 * y_curr + y_next);
-            if denominator.abs() > 0.0001 {
-                let offset = (y_prev - y_next) / denominator;
-                refined_lag = best_lag_f as f32 + offset;
-            }
-        }
-
-        // Calcul final du BPM
-        let bpm = (self.fine_rate * 60.0) / refined_lag;
-
-        // Arrondi à 0.1 près
-        let raw_bpm = (bpm * 10.0).round() / 10.0;
+        // Calcul final du BPM arrondi à 0.1 près
+        let bpm = (self.fine_config.rate * 60.0 / refined_lag * 10.0).round() / 10.0;
 
         // ============================================================
         // DÉTECTION DE DROP (AMÉLIORÉE - Comparaison Intra-Fenêtre)
         // ============================================================
         // On calcule le Drop AVANT de valider le BPM pour l'historique
 
-        let split_index = (fine_vec.len() * 3) / 4; // 75% du buffer
-
-        // 1. Énergie de l'historique (0..75%)
-        let mut history_sum_sq = 0.0;
-        for i in 0..split_index {
-            let val = fine_vec[i];
-            history_sum_sq += val * val;
-        }
-        let history_count = split_index.max(1);
-        let history_energy = history_sum_sq / history_count as f32;
-
-        // 2. Énergie récente (75%..100%)
-        let mut recent_sum_sq = 0.0;
-        for i in split_index..fine_vec.len() {
-            let val = fine_vec[i];
-            recent_sum_sq += val * val;
-        }
-        let recent_count = (fine_vec.len() - split_index).max(1);
-        let current_energy = recent_sum_sq / recent_count as f32;
-
-        // 3. Détection
-        let is_drop = (current_energy > history_energy * 1.2) && (current_energy > 0.01);
+        let is_drop = self.check_drop(&self.scratch_fine_vec, None);
 
         // ============================================================
         // GESTION DE L'HISTORIQUE ET LISSAGE
         // ============================================================
 
         let now = Instant::now();
-
-        // 1. Reset si silence prolongé (> 5s)
-        if now.duration_since(self.last_detection_time).as_secs_f32() > 10.0 {
-            self.history.clear();
-            self.reference_bpm = 0.0;
+        // 1. Reset si silence prolongé (> 10s)
+        if let Some(last_entry) = self.history.back() {
+            if now.duration_since(last_entry.timestamp).as_secs_f32() > 10.0 {
+                self.history.clear();
+                self.reference_bpm = 0.0;
+            }
         }
 
-        // 2. Calcul de l'énergie moyenne actuelle de l'historique (pour le seuil)
-        let avg_history_energy = if self.history.is_empty() {
-            0.0
-        } else {
-            self.history.iter().map(|e| e.energy).sum::<f32>() / self.history.len() as f32
+        // 2. Vérification du seuil d'énergie adaptatif
+        let avg_history_energy = match self.check_energy_threshold(norm_res_fine.energy_mean) {
+            Some(e) => e,
+            None => return empty_result,
         };
 
-        // 3. Adaptive Energy Threshold (Gate)
-        if !self.history.is_empty()
-            && fine_energy_mean < (avg_history_energy * 0.9)
-            && fine_energy_mean < 0.03
-        {
-            return empty_result;
-        }
-
         // 4. Filtrage par Référence (Lock sur Drop)
-        if is_drop {
-            // Si c'est un Drop, on met à jour la référence
-            self.reference_bpm = raw_bpm;
-        } else if self.reference_bpm > 0.0 {
-            // Si ce n'est pas un Drop mais qu'on a une référence, on vérifie la cohérence
-            let test_ref = self.reference_bpm * 0.1;
-            let is_close = (raw_bpm - self.reference_bpm).abs() <= test_ref;
-
-            // Vérification des harmoniques (x2, /2, x3)
-            let is_double = (raw_bpm - self.reference_bpm * 2.0).abs() <= test_ref / 2.0;
-            let is_half = (raw_bpm - self.reference_bpm / 2.0).abs() <= test_ref * 2.0;
-            let is_triple = (raw_bpm - self.reference_bpm * 3.0).abs() <= test_ref / 3.0;
-
-            if !is_close && !is_double && !is_half && !is_triple {
-                // BPM incohérent avec la référence -> On ignore cette détection
-                return empty_result;
-            }
-        } else {
-            // Pas de référence encore, on peut l'accepter
+        if !self.update_and_check_reference(bpm, is_drop) {
             return empty_result;
         }
 
@@ -480,40 +677,32 @@ impl BpmAnalyzer {
             self.history.pop_front();
         }
         self.history.push_back(BpmHistoryEntry {
-            bpm: raw_bpm,
-            energy: fine_energy_mean,
-            _timestamp: now,
+            bpm: bpm,
+            energy: norm_res_fine.energy_mean,
+            timestamp: now,
         });
-        self.last_detection_time = now;
 
         // 6. Calcul des valeurs lissées
         // Median BPM
-        let mut sorted_bpm: Vec<f32> = self.history.iter().map(|e| e.bpm).collect();
-        sorted_bpm.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        self.scratch_bpm_sort.clear();
+        self.scratch_bpm_sort
+            .extend(self.history.iter().map(|e| e.bpm));
+        self.scratch_bpm_sort
+            .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-        let smoothed_bpm = if !sorted_bpm.is_empty() {
-            sorted_bpm[sorted_bpm.len() / 2]
+        let smoothed_bpm = if !self.scratch_bpm_sort.is_empty() {
+            self.scratch_bpm_sort[self.scratch_bpm_sort.len() / 2]
         } else {
-            raw_bpm
+            bpm
         };
-
-        // Mean Energy
-        let smoothed_energy = if !self.history.is_empty() {
-            self.history.iter().map(|e| e.energy).sum::<f32>() / self.history.len() as f32
-        } else {
-            fine_energy_mean
-        };
-
-        // On met à jour la moyenne persistante juste pour info
-        self.average_energy = smoothed_energy;
 
         AnalysisResult {
             bpm: smoothed_bpm,
             coarse_confidence: coarse_conf,
             is_drop,
             confidence,
-            energy: fine_energy_mean,
-            average_energy: smoothed_energy,
+            energy: norm_res_fine.energy_mean,
+            average_energy: avg_history_energy,
         }
     }
 }
