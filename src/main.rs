@@ -1,9 +1,10 @@
-#[path = "../core_bpm/module.rs"]
 mod core_bpm;
+mod network_sync;
 
 use core_bpm::AudioCapture;
 use core_bpm::BpmAnalyzer;
 use core_bpm::audio::AudioMessage;
+use network_sync::LinkManager;
 use std::sync::mpsc;
 
 use std::time::Duration;
@@ -27,6 +28,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize BPM Analyzer
     let mut analyzer = BpmAnalyzer::new(SAMPLE_RATE, None)?;
+
+    // Initialize Ableton Link
+    let mut link_manager = LinkManager::new();
+    link_manager.link_state(true); // Enable Link
 
     // Use default device (None) and default restart policy (None)
     // Request a buffer size of 500ms to reduce latency
@@ -64,6 +69,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             result.energy,
                             result.average_energy,
                         );
+
+                        // Sync Ableton Link
+                        if result.bpm > 0.0 {
+                            link_manager.update_tempo(result.bpm as f64);
+                        }
                     }
 
                     // Clear accumulator for next batch
