@@ -1,0 +1,316 @@
+use cpal::Sample;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::collections::VecDeque;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::thread;
+use std::time::{Duration, Instant};
+
+pub enum AudioMessage {
+    Samples(Vec<f32>),
+    Reset,
+}
+
+#[derive(Clone, Copy)]
+pub struct PolicyAudioRestart {
+    pub max_restarts: usize,
+    pub time_window: Duration,
+    pub retry_delay: Duration,
+}
+
+impl Default for PolicyAudioRestart {
+    fn default() -> Self {
+        Self {
+            max_restarts: 5,
+            time_window: Duration::from_secs(8),
+            retry_delay: Duration::from_secs(1),
+        }
+    }
+}
+
+enum ControlMessage {
+    Stop,
+    Error(String),
+}
+pub struct AudioCapture {
+    control_sender: Sender<ControlMessage>,
+    thread_handle: Option<thread::JoinHandle<()>>,
+}
+struct AudioWorker {
+    data_sender: Sender<AudioMessage>,
+    control_sender: Sender<ControlMessage>,
+    control_receiver: Receiver<ControlMessage>,
+    device_name: Option<String>,
+    error_count: u32,
+    crash_timestamps: VecDeque<Instant>,
+    sample_rate: u32,
+    restart_policy: PolicyAudioRestart,
+    buffer_duration: Option<Duration>,
+}
+
+impl AudioWorker {
+    fn new(
+        data_sender: Sender<AudioMessage>,
+        control_sender: Sender<ControlMessage>,
+        control_receiver: Receiver<ControlMessage>,
+        device_name: Option<String>,
+        sample_rate: u32,
+        restart_policy: PolicyAudioRestart,
+        buffer_duration: Option<Duration>,
+    ) -> Self {
+        Self {
+            data_sender,
+            control_sender,
+            control_receiver,
+            device_name,
+            error_count: 0,
+            crash_timestamps: VecDeque::with_capacity(restart_policy.max_restarts),
+            sample_rate,
+            restart_policy,
+            buffer_duration,
+        }
+    }
+
+    fn should_stop_restarting(&mut self) -> bool {
+        let now = Instant::now();
+        if self.crash_timestamps.len() >= self.restart_policy.max_restarts {
+            self.crash_timestamps.pop_front();
+        }
+        self.crash_timestamps.push_back(now);
+
+        if self.crash_timestamps.len() == self.restart_policy.max_restarts {
+            let first = self.crash_timestamps.front().unwrap();
+            let last = self.crash_timestamps.back().unwrap();
+            if last.duration_since(*first) < self.restart_policy.time_window {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn run(&mut self) {
+        loop {
+            match self.initialize_stream() {
+                Ok(stream) => {
+                    println!("Audio stream started successfully.");
+
+                    match self.control_receiver.recv() {
+                        Ok(ControlMessage::Stop) => {
+                            println!("Stopping audio capture...");
+                            break;
+                        }
+                        Ok(ControlMessage::Error(e)) => {
+                            self.error_count += 1;
+                            eprintln!(
+                                "Stream error (count: {}): {}. Restarting...",
+                                self.error_count, e
+                            );
+                            if self.should_stop_restarting() {
+                                eprintln!(
+                                    "Too many errors in short time (5 errors in < 3s). Stopping."
+                                );
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                    drop(stream);
+                }
+                Err(e) => {
+                    self.error_count += 1;
+                    let delay = self.restart_policy.retry_delay;
+                    eprintln!(
+                        "Failed to initialize stream (count: {}): {}. Retrying in {:?}...",
+                        self.error_count, e, delay
+                    );
+
+                    if self.should_stop_restarting() {
+                        eprintln!("Too many errors in short time. Stopping.");
+                        break;
+                    }
+
+                    let step = Duration::from_millis(100);
+                    let steps = (delay.as_millis() as u64 + 99) / 100; // Round up
+
+                    for _ in 0..steps {
+                        thread::sleep(step);
+                        if let Ok(ControlMessage::Stop) = self.control_receiver.try_recv() {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn initialize_stream(&self) -> Result<cpal::Stream, Box<dyn std::error::Error>> {
+        let host = cpal::default_host();
+
+        let device = if let Some(name) = &self.device_name {
+            host.input_devices()?
+                .find(|d| d.name().map(|n| n == *name).unwrap_or(false))
+                .ok_or(format!("Device '{}' not found", name))?
+        } else {
+            host.default_input_device()
+                .ok_or("No input device available")?
+        };
+
+        println!("Input device: {}", device.name()?);
+
+        // Try to find a config with requested sample rate
+        let target_sample_rate = cpal::SampleRate(self.sample_rate);
+        let supported_configs = device.supported_input_configs()?;
+
+        let supported_config = supported_configs
+            .filter(|c| {
+                c.min_sample_rate() <= target_sample_rate
+                    && c.max_sample_rate() >= target_sample_rate
+            })
+            .next();
+
+        let supported_config = match supported_config {
+            Some(c) => c.with_sample_rate(target_sample_rate),
+            None => {
+                eprintln!("Error: {} Hz sample rate not supported.", self.sample_rate);
+                eprintln!("Supported configurations for device '{}':", device.name()?);
+                for config in device.supported_input_configs()? {
+                    eprintln!(
+                        "  - Channels: {}, Sample Format: {:?}, Rate: {}-{}",
+                        config.channels(),
+                        config.sample_format(),
+                        config.min_sample_rate().0,
+                        config.max_sample_rate().0
+                    );
+                }
+                return Err(format!(
+                    "{} Hz sample rate not supported by this device",
+                    self.sample_rate
+                )
+                .into());
+            }
+        };
+
+        let sample_format = supported_config.sample_format();
+
+        // Calculate buffer size based on duration if provided
+        let buffer_size = if let Some(duration) = self.buffer_duration {
+            let requested_frames = (self.sample_rate as f64 * duration.as_secs_f64()) as u32;
+            match supported_config.buffer_size() {
+                cpal::SupportedBufferSize::Range { min, max } => {
+                    let frames = requested_frames.clamp(*min, *max);
+                    if frames != requested_frames {
+                        println!(
+                            "Buffer size adjusted to match device capabilities: {} -> {}",
+                            requested_frames, frames
+                        );
+                    }
+                    cpal::BufferSize::Fixed(frames)
+                }
+                cpal::SupportedBufferSize::Unknown => cpal::BufferSize::Fixed(requested_frames),
+            }
+        } else {
+            cpal::BufferSize::Default
+        };
+
+        let mut config: cpal::StreamConfig = supported_config.into();
+        config.buffer_size = buffer_size;
+
+        println!("Selected input config: {:?}", config);
+
+        let control_sender = self.control_sender.clone();
+        let err_fn = move |err| {
+            eprintln!("an error occurred on stream: {}", err);
+            let _ = control_sender.send(ControlMessage::Error(format!("{}", err)));
+        };
+
+        let stream = match sample_format {
+            cpal::SampleFormat::F32 => {
+                self.create_execution_stream::<f32>(&device, &config.into(), err_fn)?
+            }
+            cpal::SampleFormat::I16 => {
+                self.create_execution_stream::<i16>(&device, &config.into(), err_fn)?
+            }
+            cpal::SampleFormat::U16 => {
+                self.create_execution_stream::<u16>(&device, &config.into(), err_fn)?
+            }
+            sample_format => {
+                return Err(format!("Unsupported sample format: {:?}", sample_format).into());
+            }
+        };
+
+        Ok(stream)
+    }
+
+    fn create_execution_stream<T>(
+        &self,
+        device: &cpal::Device,
+        config: &cpal::StreamConfig,
+        err_fn: impl Fn(cpal::StreamError) + Send + 'static,
+    ) -> Result<cpal::Stream, Box<dyn std::error::Error>>
+    where
+        T: cpal::Sample + cpal::SizedSample,
+        f32: cpal::FromSample<T>,
+    {
+        let sender = self.data_sender.clone();
+
+        // Notify main thread that a new stream is starting
+        let _ = sender.send(AudioMessage::Reset);
+
+        let stream = device.build_input_stream(
+            config,
+            move |data: &[T], _: &_| {
+                let buffer: Vec<f32> = data.iter().map(|&s| f32::from_sample(s)).collect();
+
+                if let Err(_e) = sender.send(AudioMessage::Samples(buffer)) {
+                    // Receiver dropped, stop sending
+                }
+            },
+            err_fn,
+            None,
+        )?;
+
+        stream.play()?;
+
+        Ok(stream)
+    }
+}
+
+impl AudioCapture {
+    pub fn new(
+        data_sender: Sender<AudioMessage>,
+        device_name: Option<String>,
+        sample_rate: u32,
+        restart_policy: Option<PolicyAudioRestart>,
+        buffer_duration: Option<Duration>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let (control_sender, control_receiver) = channel();
+        let policy = restart_policy.unwrap_or_default();
+
+        let mut worker = AudioWorker::new(
+            data_sender,
+            control_sender.clone(),
+            control_receiver,
+            device_name.clone(),
+            sample_rate,
+            policy,
+            buffer_duration,
+        );
+
+        let thread_handle = thread::spawn(move || {
+            worker.run();
+        });
+
+        Ok(AudioCapture {
+            control_sender,
+            thread_handle: Some(thread_handle),
+        })
+    }
+}
+
+impl Drop for AudioCapture {
+    fn drop(&mut self) {
+        let _ = self.control_sender.send(ControlMessage::Stop);
+        if let Some(handle) = self.thread_handle.take() {
+            let _ = handle.join();
+        }
+    }
+}

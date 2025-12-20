@@ -1,0 +1,13 @@
+[package]
+name = "rust-bpm-analyzer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Audio
+cpal = "0.16.0"
+# Sync
+rusty_link = "0.4.6"
+# Hardware
+gpio-cdev = "0.6.0"
+biquad = "0.5.0"

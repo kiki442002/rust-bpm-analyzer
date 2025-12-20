@@ -1,0 +1,95 @@
+#[path = "../core_bpm/module.rs"]
+mod core_bpm;
+
+use core_bpm::AudioCapture;
+use core_bpm::BpmAnalyzer;
+use core_bpm::audio::AudioMessage;
+use std::collections::VecDeque;
+use std::sync::mpsc;
+
+use std::time::Duration;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Starting BPM Analyzer...");
+
+    let (sender, receiver) = mpsc::channel();
+
+    // Configuration based on target architecture
+    #[cfg(target_arch = "riscv64")]
+    const SAMPLE_RATE: u32 = 16000; // Milk-V Duo target
+
+    #[cfg(not(target_arch = "riscv64"))]
+    const SAMPLE_RATE: u32 = 44100; // Development (Mac/PC)
+
+    const WINDOW_SIZE: usize = (SAMPLE_RATE as usize) * 4; // 4 seconds window
+    const HOP_SIZE: usize = SAMPLE_RATE as usize; // Update every 1 second
+
+    // Circular buffer to store audio samples
+    let mut audio_buffer: VecDeque<f32> = VecDeque::with_capacity(WINDOW_SIZE);
+    // Temporary buffer to collect new samples until we reach HOP_SIZE
+    let mut new_samples_accumulator: Vec<f32> = Vec::with_capacity(HOP_SIZE);
+
+    // Initialize BPM Analyzer
+    let mut analyzer = BpmAnalyzer::new(SAMPLE_RATE)?;
+
+    // Use default device (None) and default restart policy (None)
+    // Request a buffer size of 500ms to reduce latency
+    let _audio_capture = AudioCapture::new(
+        sender,
+        None,
+        SAMPLE_RATE,
+        None,
+        Some(Duration::from_millis(500)),
+    )?;
+
+    println!("Audio capture started. Listening... (Press Ctrl+C to stop)");
+
+    // Simple loop to consume data
+    loop {
+        match receiver.recv() {
+            Ok(AudioMessage::Samples(packet)) => {
+                // Accumulate new samples
+                new_samples_accumulator.extend(packet);
+
+                // When we have enough new samples (1 second worth)
+                if new_samples_accumulator.len() >= HOP_SIZE {
+                    // Analyze the new chunk of data
+                    let result = analyzer.process(&new_samples_accumulator);
+
+                    if (result.bpm > 0.0 || result.is_drop)
+                        && (result.confidence - result.coarse_confidence).abs() < 0.2
+                    {
+                        println!(
+                            "BPM: {:.1} | Drop: {} | Conf: {:.2} | CoarseConf: {:.2} | Energy: {:.4} | Avg: {:.4}",
+                            result.bpm,
+                            result.is_drop,
+                            result.confidence,
+                            result.coarse_confidence,
+                            result.energy,
+                            result.average_energy,
+                        );
+                    }
+
+                    // Add them to the main sliding window
+                    audio_buffer.extend(new_samples_accumulator.drain(..));
+
+                    // Keep the window size constant (remove old samples)
+                    while audio_buffer.len() > WINDOW_SIZE {
+                        audio_buffer.pop_front();
+                    }
+                }
+            }
+            Ok(AudioMessage::Reset) => {
+                println!("Audio stream reset. Clearing buffers...");
+                audio_buffer.clear();
+                new_samples_accumulator.clear();
+            }
+            Err(e) => {
+                eprintln!("Error receiving audio: {}", e);
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
