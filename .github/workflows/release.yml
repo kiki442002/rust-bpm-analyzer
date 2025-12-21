@@ -15,30 +15,34 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64
+          # 1. Linux x86_64 (Natif)
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            use_cross: true
+            use_cross: false
             extension: ""
-          # Linux ARM64
+            
+          # 2. Windows (Natif - MSVC)
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            use_cross: false
+            extension: ".exe"
+
+          # 3. macOS (Natif)
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use_cross: false
+            extension: ""
+
+          # 4. Linux ARM64 (Cross obligatoire car runner Intel)
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             use_cross: true
             extension: ""
-          # Linux ARMv7 (Raspberry Pi)
+
+          # 5. Linux ARMv7 (Cross obligatoire car runner Intel)
           - target: armv7-unknown-linux-gnueabihf
             os: ubuntu-latest
             use_cross: true
-            extension: ""
-          # Windows
-          - target: x86_64-pc-windows-gnu
-            os: ubuntu-latest
-            use_cross: true
-            extension: ".exe"
-          # macOS (Apple Silicon)
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            use_cross: false
             extension: ""
 
     steps:
@@ -50,11 +54,25 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # Dépendances pour Linux Natif (x86_64)
+      - name: Install Linux Dependencies
+        if: matrix.os == 'ubuntu-latest' && matrix.use_cross == false
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev clang libclang-dev
+
+      # Dépendances pour Windows Natif
+      - name: Install Windows Dependencies
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install llvm
+
       - name: Install Cross
         if: matrix.use_cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build
+        shell: bash
         run: |
           if [ "${{ matrix.use_cross }}" == "true" ]; then
             echo "Building with Cross..."

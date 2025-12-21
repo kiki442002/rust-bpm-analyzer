@@ -1,0 +1,17 @@
+FROM --platform=linux/amd64 ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:main
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Enable multi-arch support for armhf
+RUN dpkg --add-architecture armhf && \
+    apt-get update && \
+    apt-get install -y \
+    libasound2-dev:armhf \
+    clang \
+    libclang-dev \
+    llvm \
+    pkg-config
+
+# Ensure pkg-config looks in the right place for armhf libraries
+ENV PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
+ENV PKG_CONFIG_ALLOW_CROSS=1
