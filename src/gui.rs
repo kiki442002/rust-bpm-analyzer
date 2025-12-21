@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::core_bpm::{AnalysisResult, AudioCapture, BpmAnalyzer, audio::AudioMessage};
+use crate::core_bpm::{AudioCapture, BpmAnalyzer, audio::AudioMessage};
 use crate::network_sync::LinkManager;
 
 const SAMPLE_RATE: u32 = 44100; // Desktop is always 44100 in this project
