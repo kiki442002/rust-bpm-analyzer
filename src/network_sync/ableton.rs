@@ -1,9 +1,10 @@
 use rusty_link::{AblLink, SessionState};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub struct LinkManager {
     link: AblLink,
     session_state: SessionState,
+    last_sync_time: Instant,
 }
 
 impl LinkManager {
@@ -13,10 +14,11 @@ impl LinkManager {
         Self {
             link,
             session_state: SessionState::new(),
+            last_sync_time: Instant::now(),
         }
     }
 
-    pub fn update_tempo(&mut self, bpm: f64) {
+    pub fn update_tempo(&mut self, bpm: f64, is_drop: bool, beat_offset: Option<Duration>) {
         self.link.capture_app_session_state(&mut self.session_state);
         let current_tempo = self.session_state.tempo();
 
@@ -25,6 +27,15 @@ impl LinkManager {
             let time = self.link.clock_micros();
             self.session_state.set_tempo(bpm, time);
             self.link.commit_app_session_state(&self.session_state);
+        }
+
+        // Sync Phase on Drop (with 10s cooldown)
+        if is_drop && self.last_sync_time.elapsed().as_secs() > 10 {
+            if let Some(offset) = beat_offset {
+                println!("Drop detected! Syncing Downbeat (latency: {:?})...", offset);
+                self.sync_downbeat(offset);
+                self.last_sync_time = Instant::now();
+            }
         }
     }
 
