@@ -647,8 +647,9 @@ impl BpmAnalyzer {
         // DÉTECTION DE DROP (AMÉLIORÉE - Comparaison Intra-Fenêtre)
         // ============================================================
         // On calcule le Drop AVANT de valider le BPM pour l'historique
+        // On augmente le seuil (1.5 au lieu de 1.3) et on demande une confiance minimale
 
-        let is_drop = self.check_drop(&self.scratch_fine_vec, None);
+        let is_drop = confidence > 0.5 && self.check_drop(&self.scratch_fine_vec, Some(1.5));
 
         // ============================================================
         // GESTION DE L'HISTORIQUE ET LISSAGE
@@ -699,9 +700,17 @@ impl BpmAnalyzer {
         };
 
         // Calcul de l'offset précis du beat (Latence)
+        // Si c'est un Drop, on cherche le pic dans la section récente (derniers 25%)
+        // pour éviter de se caler sur un pic ancien.
+        let search_start = if is_drop {
+            (self.scratch_fine_vec.len() * 3) / 4
+        } else {
+            0
+        };
+
         let mut max_energy = 0.0;
-        let mut max_energy_index = 0;
-        for (i, &val) in self.scratch_fine_vec.iter().enumerate() {
+        let mut max_energy_index = search_start;
+        for (i, &val) in self.scratch_fine_vec.iter().enumerate().skip(search_start) {
             if val > max_energy {
                 max_energy = val;
                 max_energy_index = i;
