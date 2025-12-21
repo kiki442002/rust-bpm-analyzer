@@ -8,6 +8,9 @@ edition = "2024"
 cpal = "0.16.0"
 # Sync
 rusty_link = "0.4.6"
-# Hardware
-gpio-cdev = "0.6.0"
+# DSP
 biquad = "0.5.0"
+
+# Dépendances spécifiques à Linux (Milk-V Duo, Raspberry Pi, Desktop Linux)
+[target.'cfg(target_os = "linux")'.dependencies]
+gpio-cdev = "0.6.0"
