@@ -34,6 +34,12 @@ enum ControlMessage {
 pub struct AudioCapture {
     control_sender: Sender<ControlMessage>,
     thread_handle: Option<thread::JoinHandle<()>>,
+    device_name: Option<String>,
+    // Fields needed for restarting
+    data_sender: Sender<AudioMessage>,
+    sample_rate: u32,
+    restart_policy: PolicyAudioRestart,
+    buffer_duration: Option<Duration>,
 }
 struct AudioWorker {
     data_sender: Sender<AudioMessage>,
@@ -286,7 +292,7 @@ impl AudioCapture {
         let policy = restart_policy.unwrap_or_default();
 
         let mut worker = AudioWorker::new(
-            data_sender,
+            data_sender.clone(),
             control_sender.clone(),
             control_receiver,
             device_name.clone(),
@@ -302,7 +308,59 @@ impl AudioCapture {
         Ok(AudioCapture {
             control_sender,
             thread_handle: Some(thread_handle),
+            device_name,
+            data_sender,
+            sample_rate,
+            restart_policy: policy,
+            buffer_duration,
         })
+    }
+
+    pub fn list_devices() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let host = cpal::default_host();
+        let devices = host.input_devices()?;
+        let mut names = Vec::new();
+        for device in devices {
+            if let Ok(name) = device.name() {
+                names.push(name);
+            }
+        }
+        Ok(names)
+    }
+
+    pub fn set_device(
+        &mut self,
+        device_name: Option<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Stop current worker
+        let _ = self.control_sender.send(ControlMessage::Stop);
+        if let Some(handle) = self.thread_handle.take() {
+            let _ = handle.join();
+        }
+
+        // Create new worker with new device
+        let (control_sender, control_receiver) = channel();
+
+        let mut worker = AudioWorker::new(
+            self.data_sender.clone(),
+            control_sender.clone(),
+            control_receiver,
+            device_name.clone(),
+            self.sample_rate,
+            self.restart_policy,
+            self.buffer_duration,
+        );
+
+        let thread_handle = thread::spawn(move || {
+            worker.run();
+        });
+
+        // Update self
+        self.control_sender = control_sender;
+        self.thread_handle = Some(thread_handle);
+        self.device_name = device_name;
+
+        Ok(())
     }
 }
 
