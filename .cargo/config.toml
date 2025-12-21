@@ -10,8 +10,8 @@ rustflags = ["-C", "target-cpu=native"]
 
 # Linux AMD64 (Standard)
 # Nécessite un linker si compilé depuis macOS (ex: x86_64-unknown-linux-gnu-gcc)
-[target.x86_64-unknown-linux-gnu]
-linker = "x86_64-unknown-linux-gnu-gcc"
+# [target.x86_64-unknown-linux-gnu]
+# linker = "x86_64-unknown-linux-gnu-gcc"
 
 # Windows AMD64 (Via MinGW pour cross-compilation depuis Mac/Linux)
 [target.x86_64-pc-windows-gnu]
@@ -19,8 +19,8 @@ linker = "x86_64-w64-mingw32-gcc"
 
 # Milk-V / ARM64 Linux
 # Nécessite le toolchain ARM64 (ex: aarch64-unknown-linux-gnu-gcc)
-[target.aarch64-unknown-linux-gnu]
-linker = "aarch64-unknown-linux-gnu-gcc"
+# [target.aarch64-unknown-linux-gnu]
+# linker = "aarch64-unknown-linux-gnu-gcc"
 
 # Alias pour simplifier les commandes de build
 [alias]
