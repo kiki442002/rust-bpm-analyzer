@@ -14,3 +14,9 @@ biquad = "0.5.0"
 # Dépendances spécifiques à Linux (Milk-V Duo, Raspberry Pi, Desktop Linux)
 [target.'cfg(target_os = "linux")'.dependencies]
 gpio-cdev = "0.6.0"
+
+# GUI uniquement pour Desktop (Mac, Windows, Linux x86)
+# On exclut Linux ARM/ARM64 (Raspberry Pi, Milk-V)
+[target.'cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))'.dependencies]
+iced = "0.13"
+
