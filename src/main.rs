@@ -16,11 +16,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_sync_time = Instant::now();
 
     // Configuration based on target architecture
-    #[cfg(target_arch = "riscv64")]
-    const SAMPLE_RATE: u32 = 16000; // Milk-V Duo target
+    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
+    const SAMPLE_RATE: u32 = 11025; // Milk-V Duo target (Low CPU usage)
 
-    #[cfg(not(target_arch = "riscv64"))]
-    const SAMPLE_RATE: u32 = 44100; // Development (Mac/PC)
+    #[cfg(not(all(target_arch = "aarch64", target_os = "linux")))]
+    const SAMPLE_RATE: u32 = 44100; // Development (Mac/PC/Linux)
 
     const HOP_SIZE: usize = SAMPLE_RATE as usize; // Update every 1 second
 
