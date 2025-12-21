@@ -1,28 +1,43 @@
 mod core_bpm;
 mod network_sync;
 
+#[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]
+mod gui;
+
 use core_bpm::AudioCapture;
 use core_bpm::BpmAnalyzer;
 use core_bpm::audio::AudioMessage;
 use network_sync::LinkManager;
 use std::sync::mpsc;
+use std::time::Duration;
 
-use std::time::{Duration, Instant};
+// Configuration based on target architecture
+#[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
+const SAMPLE_RATE: u32 = 11025; // embedded Linux 
+
+#[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]
+const SAMPLE_RATE: u32 = 44100; // Development (Mac/PC/Linux)
+
+const HOP_SIZE: usize = SAMPLE_RATE as usize; // Update every 1 second
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting BPM Analyzer...");
+    #[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]
+    {
+        println!("Starting GUI Mode...");
+        gui::run()
+    }
+
+    #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
+    {
+        println!("Starting Headless Mode...");
+        run_headless()
+    }
+}
+
+fn run_headless() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Starting BPM Analyzer (Headless)...");
 
     let (sender, receiver) = mpsc::channel();
-    let mut last_sync_time = Instant::now();
-
-    // Configuration based on target architecture
-    #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
-    const SAMPLE_RATE: u32 = 11025; // Milk-V Duo target (Low CPU usage)
-
-    #[cfg(not(all(target_arch = "aarch64", target_os = "linux")))]
-    const SAMPLE_RATE: u32 = 44100; // Development (Mac/PC/Linux)
-
-    const HOP_SIZE: usize = SAMPLE_RATE as usize; // Update every 1 second
 
     // Temporary buffer to collect new samples until we reach HOP_SIZE
     let mut new_samples_accumulator: Vec<f32> = Vec::with_capacity(HOP_SIZE);
@@ -56,11 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // When we have enough new samples (1 second worth)
                 if new_samples_accumulator.len() >= HOP_SIZE {
                     // Analyze the new chunk of data
-                    let result = analyzer.process(&new_samples_accumulator);
-
-                    if (result.bpm > 0.0 || result.is_drop)
-                        && (result.confidence - result.coarse_confidence).abs() < 0.2
-                    {
+                    if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
                         println!(
                             "BPM: {:.1} | Drop: {} | Conf: {:.2} | CoarseConf: {:.2} | Energy: {:.4} | Avg: {:.4}",
                             result.bpm,
@@ -72,21 +83,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
 
                         // Sync Ableton Link
-                        if result.bpm > 0.0 {
-                            link_manager.update_tempo(result.bpm as f64);
-                        }
-
-                        // Sync Phase on Drop (with 10s cooldown)
-                        if result.is_drop && last_sync_time.elapsed().as_secs() > 10 {
-                            if let Some(offset) = result.beat_offset {
-                                println!(
-                                    "Drop detected! Syncing Downbeat (latency: {:?})...",
-                                    offset
-                                );
-                                link_manager.sync_downbeat(offset);
-                                last_sync_time = Instant::now();
-                            }
-                        }
+                        link_manager.update_tempo(
+                            result.bpm as f64,
+                            result.is_drop,
+                            result.beat_offset,
+                        );
                     }
 
                     // Clear accumulator for next batch
