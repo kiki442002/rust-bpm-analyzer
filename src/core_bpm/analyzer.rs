@@ -135,41 +135,47 @@ impl AudioFilter {
         for _ in 0..sections_count {
             match filter_type {
                 FilterType::LowPass(cutoff) => {
-                    let coeffs = Coefficients::<f32>::from_params(
-                        Type::LowPass,
-                        Hertz::<f32>::from_hz(sample_rate).unwrap(),
-                        Hertz::<f32>::from_hz(cutoff).unwrap(),
-                        Q_BUTTERWORTH_F32,
-                    )
-                    .map_err(|e| format!("LP Error: {:?}", e))?;
+                    let fs = Hertz::<f32>::from_hz(sample_rate)
+                        .map_err(|_| "Invalid sample rate".to_string())?;
+                    let f0 = Hertz::<f32>::from_hz(cutoff)
+                        .map_err(|_| "Invalid cutoff frequency".to_string())?;
+
+                    let coeffs =
+                        Coefficients::<f32>::from_params(Type::LowPass, fs, f0, Q_BUTTERWORTH_F32)
+                            .map_err(|e| format!("LP Error: {:?}", e))?;
                     chain.push(DirectForm2Transposed::<f32>::new(coeffs));
                 }
                 FilterType::HighPass(cutoff) => {
-                    let coeffs = Coefficients::<f32>::from_params(
-                        Type::HighPass,
-                        Hertz::<f32>::from_hz(sample_rate).unwrap(),
-                        Hertz::<f32>::from_hz(cutoff).unwrap(),
-                        Q_BUTTERWORTH_F32,
-                    )
-                    .map_err(|e| format!("HP Error: {:?}", e))?;
+                    let fs = Hertz::<f32>::from_hz(sample_rate)
+                        .map_err(|_| "Invalid sample rate".to_string())?;
+                    let f0 = Hertz::<f32>::from_hz(cutoff)
+                        .map_err(|_| "Invalid cutoff frequency".to_string())?;
+
+                    let coeffs =
+                        Coefficients::<f32>::from_params(Type::HighPass, fs, f0, Q_BUTTERWORTH_F32)
+                            .map_err(|e| format!("HP Error: {:?}", e))?;
                     chain.push(DirectForm2Transposed::<f32>::new(coeffs));
                 }
                 FilterType::BandPass(low, high) => {
-                    // BandPass = HighPass suivi de LowPass
-                    // Pour un ordre 2 demandé, on met 1 HP et 1 LP (total ordre 4 en réalité, mais standard pour BP)
+                    let fs = Hertz::<f32>::from_hz(sample_rate)
+                        .map_err(|_| "Invalid sample rate".to_string())?;
+                    let f_low = Hertz::<f32>::from_hz(low)
+                        .map_err(|_| "Invalid low cutoff frequency".to_string())?;
+                    let f_high = Hertz::<f32>::from_hz(high)
+                        .map_err(|_| "Invalid high cutoff frequency".to_string())?;
 
                     let hp_coeffs = Coefficients::<f32>::from_params(
                         Type::HighPass,
-                        Hertz::<f32>::from_hz(sample_rate).unwrap(),
-                        Hertz::<f32>::from_hz(low).unwrap(),
+                        fs,
+                        f_low,
                         Q_BUTTERWORTH_F32,
                     )
                     .map_err(|e| format!("BP-HP Error: {:?}", e))?;
 
                     let lp_coeffs = Coefficients::<f32>::from_params(
                         Type::LowPass,
-                        Hertz::<f32>::from_hz(sample_rate).unwrap(),
-                        Hertz::<f32>::from_hz(high).unwrap(),
+                        fs,
+                        f_high,
                         Q_BUTTERWORTH_F32,
                     )
                     .map_err(|e| format!("BP-LP Error: {:?}", e))?;
@@ -521,17 +527,10 @@ impl BpmAnalyzer {
         }
     }
 
-    pub fn process(&mut self, new_samples: &[f32]) -> AnalysisResult {
-        let empty_result = AnalysisResult {
-            bpm: 0.0,
-            is_drop: false,
-            confidence: 0.0,
-            coarse_confidence: 0.0,
-            energy: 0.0,
-            average_energy: 0.0,
-            beat_offset: None,
-        };
-
+    pub fn process(
+        &mut self,
+        new_samples: &[f32],
+    ) -> Result<Option<AnalysisResult>, Box<dyn std::error::Error>> {
         // 1. Filtrage et Downsampling (Input -> Fine)
         self.fine_config
             .update_buffer(new_samples, &mut self.scratch_processing, |chunk| {
@@ -558,7 +557,7 @@ impl BpmAnalyzer {
 
         // On attend que le buffer soit plein
         if self.coarse_config.buffer.len() < self.coarse_config.buffer.capacity() {
-            return empty_result;
+            return Ok(None);
         }
 
         // ============================================================
@@ -572,7 +571,7 @@ impl BpmAnalyzer {
         );
 
         if norm_res_coarse.energy_mean <= 0.001 {
-            return empty_result;
+            return Ok(None);
         }
 
         let (best_lag_c, coarse_conf, max_corr_c) = match self.search_correlation(
@@ -583,7 +582,7 @@ impl BpmAnalyzer {
             self.config.thresholds.coarse_confidence,
         ) {
             Ok(res) => res,
-            Err(_) => return empty_result,
+            Err(_) => return Ok(None),
         };
 
         // Correction d'octave (Harmonic Check)
@@ -625,7 +624,7 @@ impl BpmAnalyzer {
             self.config.thresholds.fine_confidence,
         ) {
             Ok(res) => res,
-            Err(_) => return empty_result,
+            Err(_) => return Ok(None),
         };
 
         // ============================================================
@@ -667,12 +666,12 @@ impl BpmAnalyzer {
         // 2. Vérification du seuil d'énergie adaptatif
         let avg_history_energy = match self.check_energy_threshold(norm_res_fine.energy_mean) {
             Some(e) => e,
-            None => return empty_result,
+            None => return Ok(None),
         };
 
         // 4. Filtrage par Référence (Lock sur Drop)
         if !self.update_and_check_reference(bpm, is_drop) {
-            return empty_result;
+            return Ok(None);
         }
 
         // 5. Mise à jour de l'historique
@@ -725,7 +724,7 @@ impl BpmAnalyzer {
         let latency_seconds = samples_since_peak as f32 / self.fine_config.rate;
         let beat_offset = Some(Duration::from_secs_f32(latency_seconds));
 
-        AnalysisResult {
+        Ok(Some(AnalysisResult {
             bpm: smoothed_bpm,
             coarse_confidence: coarse_conf,
             is_drop,
@@ -733,6 +732,6 @@ impl BpmAnalyzer {
             energy: norm_res_fine.energy_mean,
             average_energy: avg_history_energy,
             beat_offset,
-        }
+        }))
     }
 }
