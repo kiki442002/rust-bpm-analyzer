@@ -103,7 +103,7 @@ jobs:
           else
             # --- Linux x64 (.deb + AppImage) ---
             echo "Bundling for Linux..."
-            cargo bundle --release --target ${{ matrix.target }} --verbose
+            cargo bundle --release --target ${{ matrix.target }} 
             
             # 1. Copy .deb
             find "target/${{ matrix.target }}/release/bundle/deb" -name "*.deb" -exec cp {} "rust-bpm-analyzer-${{ matrix.target }}.deb" \;
