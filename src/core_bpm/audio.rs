@@ -254,8 +254,11 @@ impl AudioWorker {
         };
 
         let stream = match sample_format {
-            cpal::SampleFormat::F32 => {
-                self.create_execution_stream::<f32>(&device, &config.into(), err_fn)?
+            cpal::SampleFormat::I8 => {
+                self.create_execution_stream::<i8>(&device, &config.into(), err_fn)?
+            }
+            cpal::SampleFormat::U8 => {
+                self.create_execution_stream::<u8>(&device, &config.into(), err_fn)?
             }
             cpal::SampleFormat::I16 => {
                 self.create_execution_stream::<i16>(&device, &config.into(), err_fn)?
@@ -263,8 +266,17 @@ impl AudioWorker {
             cpal::SampleFormat::U16 => {
                 self.create_execution_stream::<u16>(&device, &config.into(), err_fn)?
             }
-            cpal::SampleFormat::U8 => {
-                self.create_execution_stream::<u8>(&device, &config.into(), err_fn)?
+            cpal::SampleFormat::I32 => {
+                self.create_execution_stream::<i32>(&device, &config.into(), err_fn)?
+            }
+            cpal::SampleFormat::U32 => {
+                self.create_execution_stream::<u32>(&device, &config.into(), err_fn)?
+            }
+            cpal::SampleFormat::F32 => {
+                self.create_execution_stream::<f32>(&device, &config.into(), err_fn)?
+            }
+            cpal::SampleFormat::F64 => {
+                self.create_execution_stream::<f64>(&device, &config.into(), err_fn)?
             }
             sample_format => {
                 return Err(format!("Unsupported sample format: {:?}", sample_format).into());
