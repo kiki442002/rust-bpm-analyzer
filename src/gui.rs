@@ -1,8 +1,6 @@
 use iced::alignment::Horizontal;
 use iced::widget::{button, column, container, pick_list, row, text};
-use iced::window::icon;
 use iced::{Color, Element, Length, Subscription, Task, Theme};
-use image::GenericImageView;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
