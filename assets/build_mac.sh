@@ -37,5 +37,8 @@ else
     plutil -insert NSMicrophoneUsageDescription -string "Cette application a besoin d'accéder au microphone pour analyser le BPM de la musique." "$PLIST_PATH"
 fi
 
+echo "Re-signature de l'application (ad-hoc) pour éviter l'erreur 'endommagé'..."
+codesign --force --deep --sign - "$BUNDLE_DIR/BPM Analyzer.app"
+
 echo "✅ Terminé ! L'application est prête."
 echo "Vous pouvez la trouver ici : $BUNDLE_DIR/BPM Analyzer.app"
