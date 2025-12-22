@@ -328,6 +328,11 @@ impl AudioCapture {
         Ok(names)
     }
 
+    pub fn default_device_name() -> Option<String> {
+        let host = cpal::default_host();
+        host.default_input_device().and_then(|d| d.name().ok())
+    }
+
     pub fn set_device(
         &mut self,
         device_name: Option<String>,
