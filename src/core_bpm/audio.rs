@@ -177,7 +177,6 @@ impl AudioWorker {
             if target_sample_rate >= min_r && target_sample_rate <= max_r {
                 best_config = Some(config);
                 selected_rate = target_sample_rate;
-                min_diff = 0;
                 break;
             }
 
