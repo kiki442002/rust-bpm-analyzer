@@ -1,7 +1,12 @@
 [package]
 name = "rust-bpm-analyzer"
 version = "0.0.1"
-edition = "2024"
+edition = "2025"
+authors = ["Killian PICOT"]
+description = "A real-time BPM analyzer with Ableton Link synchronization."
+license-file = "LICENSE"
+readme = "README.md"
+repository = "https://github.com/kiki442002/rust-bpm-analyzer"
 
 [dependencies]
 # Audio
