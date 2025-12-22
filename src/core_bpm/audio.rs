@@ -360,26 +360,6 @@ impl AudioCapture {
         host.default_input_device().and_then(|d| d.name().ok())
     }
 
-    pub fn get_supported_sample_rates(
-        device_name: Option<String>,
-    ) -> Result<Vec<(u32, u32)>, Box<dyn std::error::Error>> {
-        let host = cpal::default_host();
-        let device = if let Some(name) = device_name {
-            host.input_devices()?
-                .find(|d| d.name().map(|n| n == name).unwrap_or(false))
-                .ok_or(format!("Device '{}' not found", name))?
-        } else {
-            host.default_input_device()
-                .ok_or("No input device available")?
-        };
-
-        let mut rates = Vec::new();
-        for config in device.supported_input_configs()? {
-            rates.push((config.min_sample_rate().0, config.max_sample_rate().0));
-        }
-        Ok(rates)
-    }
-
     pub fn set_device(
         &mut self,
         device_name: Option<String>,
