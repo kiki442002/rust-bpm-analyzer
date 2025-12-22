@@ -267,9 +267,8 @@ fn run_analysis_loop(
                     new_samples_accumulator.extend(packet);
 
                     if new_samples_accumulator.len() >= HOP_SIZE {
-                        let mut bpm_to_send: Option<f32> = None;
                         if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
-                            bpm_to_send = Some(result.bpm);
+                            let bpm_to_send = Some(result.bpm);
                             // Send update to GUI
                             let _ = tx.send(GuiUpdate {
                                 bpm: bpm_to_send,
