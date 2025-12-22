@@ -270,6 +270,11 @@ fn run_analysis_loop(
                         let mut bpm_to_send: Option<f32> = None;
                         if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
                             bpm_to_send = Some(result.bpm);
+                            // Send update to GUI
+                            let _ = tx.send(GuiUpdate {
+                                bpm: bpm_to_send,
+                                num_peers: link_manager.num_peers(),
+                            });
 
                             // Sync Ableton Link
                             link_manager.update_tempo(
@@ -288,11 +293,6 @@ fn run_analysis_loop(
                             );
                         }
 
-                        // Send update to GUI
-                        let _ = tx.send(GuiUpdate {
-                            bpm: bpm_to_send,
-                            num_peers: link_manager.num_peers(),
-                        });
                         last_ui_update = Instant::now();
 
                         new_samples_accumulator.clear();
