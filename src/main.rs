@@ -9,8 +9,7 @@ mod gui;
 // Configuration grouped by platform
 #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
 mod platform {
-    pub const SAMPLE_RATE: u32 = 11025;
-    pub const HOP_SIZE: usize = SAMPLE_RATE as usize;
+    pub const TARGET_SAMPLE_RATE: u32 = 11025;
 
     pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!("Starting embedded Mode...");
@@ -20,8 +19,7 @@ mod platform {
 
 #[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]
 mod platform {
-    pub const SAMPLE_RATE: u32 = 44100;
-    pub const HOP_SIZE: usize = SAMPLE_RATE as usize;
+    pub const TARGET_SAMPLE_RATE: u32 = 44100;
 
     pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!("Starting GUI Mode...");
@@ -29,7 +27,6 @@ mod platform {
     }
 }
 
-pub use platform::SAMPLE_RATE;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     platform::run()
 }

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::core_bpm::{AudioCapture, BpmAnalyzer, audio::AudioMessage};
 use crate::network_sync::LinkManager;
-use crate::platform::{HOP_SIZE, SAMPLE_RATE};
+use crate::platform::TARGET_SAMPLE_RATE;
 
 #[derive(Debug, Clone)]
 pub struct GuiUpdate {
@@ -218,9 +218,10 @@ fn run_analysis_loop(
     let mut last_ui_update = Instant::now();
     let mut is_enabled = false;
     let mut current_device: Option<String> = None;
+    let mut current_hop_size = TARGET_SAMPLE_RATE as usize;
 
-    let mut new_samples_accumulator: Vec<f32> = Vec::with_capacity(HOP_SIZE);
-    let mut analyzer = BpmAnalyzer::new(SAMPLE_RATE, None)?;
+    let mut new_samples_accumulator: Vec<f32> = Vec::with_capacity(TARGET_SAMPLE_RATE as usize);
+    let mut analyzer = BpmAnalyzer::new(TARGET_SAMPLE_RATE, None)?;
 
     let mut link_manager = LinkManager::new();
 
@@ -240,7 +241,7 @@ fn run_analysis_loop(
                             match AudioCapture::new(
                                 sender_clone.clone(),
                                 current_device.clone(),
-                                SAMPLE_RATE,
+                                TARGET_SAMPLE_RATE,
                                 None,
                                 Some(Duration::from_millis(500)),
                             ) {
@@ -274,7 +275,7 @@ fn run_analysis_loop(
                 if is_enabled {
                     new_samples_accumulator.extend(packet);
 
-                    if new_samples_accumulator.len() >= HOP_SIZE {
+                    if new_samples_accumulator.len() >= current_hop_size {
                         if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
                             let bpm_to_send = Some(result.bpm);
                             // Send update to GUI
@@ -311,6 +312,24 @@ fn run_analysis_loop(
             }
             Ok(AudioMessage::Reset) => {
                 new_samples_accumulator.clear();
+            }
+            Ok(AudioMessage::SampleRateChanged(rate)) => {
+                println!("Audio sample rate changed to: {} Hz", rate);
+                match BpmAnalyzer::new(rate, None) {
+                    Ok(new_analyzer) => {
+                        analyzer = new_analyzer;
+                        // Update HOP_SIZE to match 1 second of audio at new rate
+                        current_hop_size = rate as usize;
+                        // Resize accumulator
+                        if new_samples_accumulator.capacity() < current_hop_size {
+                            new_samples_accumulator
+                                .reserve(current_hop_size - new_samples_accumulator.len());
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to re-initialize analyzer with rate {}: {}", rate, e)
+                    }
+                }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 // No audio received (expected if disabled)

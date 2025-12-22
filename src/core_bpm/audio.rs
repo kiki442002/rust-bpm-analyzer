@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 pub enum AudioMessage {
     Samples(Vec<f32>),
     Reset,
+    SampleRateChanged(u32),
 }
 
 #[derive(Clone, Copy)]
@@ -161,45 +162,70 @@ impl AudioWorker {
         };
 
         println!("Input device: {}", device.name()?);
-
-        // Try to find a config with requested sample rate
         let target_sample_rate = cpal::SampleRate(self.sample_rate);
         let supported_configs = device.supported_input_configs()?;
+        let configs: Vec<_> = supported_configs.collect();
 
-        let supported_config = supported_configs
-            .filter(|c| {
-                c.min_sample_rate() <= target_sample_rate
-                    && c.max_sample_rate() >= target_sample_rate
-            })
-            .next();
+        let mut best_config = None;
+        let mut min_diff = u32::MAX;
+        let mut selected_rate = target_sample_rate;
 
-        let supported_config = match supported_config {
-            Some(c) => c.with_sample_rate(target_sample_rate),
+        for config in &configs {
+            let min_r = config.min_sample_rate();
+            let max_r = config.max_sample_rate();
+
+            if target_sample_rate >= min_r && target_sample_rate <= max_r {
+                best_config = Some(config);
+                selected_rate = target_sample_rate;
+                min_diff = 0;
+                break;
+            }
+
+            // Check distance to min
+            let diff_min = if target_sample_rate < min_r {
+                min_r.0 - target_sample_rate.0
+            } else {
+                target_sample_rate.0 - min_r.0
+            };
+            if diff_min < min_diff {
+                min_diff = diff_min;
+                best_config = Some(config);
+                selected_rate = min_r;
+            }
+
+            // Check distance to max
+            let diff_max = if target_sample_rate < max_r {
+                max_r.0 - target_sample_rate.0
+            } else {
+                target_sample_rate.0 - max_r.0
+            };
+            if diff_max < min_diff {
+                min_diff = diff_max;
+                best_config = Some(config);
+                selected_rate = max_r;
+            }
+        }
+
+        let supported_config = match best_config {
+            Some(c) => c.with_sample_rate(selected_rate),
             None => {
-                eprintln!("Error: {} Hz sample rate not supported.", self.sample_rate);
-                eprintln!("Supported configurations for device '{}':", device.name()?);
-                for config in device.supported_input_configs()? {
-                    eprintln!(
-                        "  - Channels: {}, Sample Format: {:?}, Rate: {}-{}",
-                        config.channels(),
-                        config.sample_format(),
-                        config.min_sample_rate().0,
-                        config.max_sample_rate().0
-                    );
-                }
-                return Err(format!(
-                    "{} Hz sample rate not supported by this device",
-                    self.sample_rate
-                )
-                .into());
+                eprintln!("Error: No supported configuration found.");
+                return Err("No supported input config found".into());
             }
         };
+
+        if selected_rate != target_sample_rate {
+            println!(
+                "Requested sample rate {} Hz not supported. Using closest: {} Hz",
+                target_sample_rate.0, selected_rate.0
+            );
+        }
 
         let sample_format = supported_config.sample_format();
 
         // Calculate buffer size based on duration if provided
         let buffer_size = if let Some(duration) = self.buffer_duration {
-            let requested_frames = (self.sample_rate as f64 * duration.as_secs_f64()) as u32;
+            let requested_frames = (selected_rate.0 as f64 * duration.as_secs_f64()) as u32;
             match supported_config.buffer_size() {
                 cpal::SupportedBufferSize::Range { min, max } => {
                     let frames = requested_frames.clamp(*min, *max);
@@ -260,6 +286,8 @@ impl AudioWorker {
 
         // Notify main thread that a new stream is starting
         let _ = sender.send(AudioMessage::Reset);
+        // Notify about the actual sample rate being used
+        let _ = sender.send(AudioMessage::SampleRateChanged(config.sample_rate.0));
 
         let stream = device.build_input_stream(
             config,
@@ -331,6 +359,26 @@ impl AudioCapture {
     pub fn default_device_name() -> Option<String> {
         let host = cpal::default_host();
         host.default_input_device().and_then(|d| d.name().ok())
+    }
+
+    pub fn get_supported_sample_rates(
+        device_name: Option<String>,
+    ) -> Result<Vec<(u32, u32)>, Box<dyn std::error::Error>> {
+        let host = cpal::default_host();
+        let device = if let Some(name) = device_name {
+            host.input_devices()?
+                .find(|d| d.name().map(|n| n == name).unwrap_or(false))
+                .ok_or(format!("Device '{}' not found", name))?
+        } else {
+            host.default_input_device()
+                .ok_or("No input device available")?
+        };
+
+        let mut rates = Vec::new();
+        for config in device.supported_input_configs()? {
+            rates.push((config.min_sample_rate().0, config.max_sample_rate().0));
+        }
+        Ok(rates)
     }
 
     pub fn set_device(

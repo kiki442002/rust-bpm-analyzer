@@ -3,6 +3,8 @@ pub fn run_headless() -> Result<(), Box<dyn std::error::Error>> {
 
     let (sender, receiver) = mpsc::channel();
 
+    let mut current_hop_size = HOP_SIZE;
+
     // Temporary buffer to collect new samples until we reach HOP_SIZE
     let mut new_samples_accumulator: Vec<f32> = Vec::with_capacity(HOP_SIZE);
 
@@ -33,7 +35,7 @@ pub fn run_headless() -> Result<(), Box<dyn std::error::Error>> {
                 new_samples_accumulator.extend(packet);
 
                 // When we have enough new samples (1 second worth)
-                if new_samples_accumulator.len() >= HOP_SIZE {
+                if new_samples_accumulator.len() >= current_hop_size {
                     // Analyze the new chunk of data
                     if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
                         println!(
@@ -61,6 +63,22 @@ pub fn run_headless() -> Result<(), Box<dyn std::error::Error>> {
             Ok(AudioMessage::Reset) => {
                 println!("Audio stream reset. Clearing buffers...");
                 new_samples_accumulator.clear();
+            }
+            Ok(AudioMessage::SampleRateChanged(rate)) => {
+                println!("Audio sample rate changed to: {} Hz", rate);
+                match BpmAnalyzer::new(rate, None) {
+                    Ok(new_analyzer) => {
+                        analyzer = new_analyzer;
+                        current_hop_size = rate as usize;
+                        if new_samples_accumulator.capacity() < current_hop_size {
+                            new_samples_accumulator
+                                .reserve(current_hop_size - new_samples_accumulator.len());
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to re-initialize analyzer with rate {}: {}", rate, e)
+                    }
+                }
             }
             Err(e) => {
                 eprintln!("Error receiving audio: {}", e);
