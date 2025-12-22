@@ -1,6 +1,8 @@
 use iced::alignment::Horizontal;
 use iced::widget::{button, column, container, pick_list, row, text};
+use iced::window::icon;
 use iced::{Color, Element, Length, Subscription, Task, Theme};
+use image::GenericImageView;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -22,10 +24,15 @@ pub enum GuiCommand {
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let window_settings = iced::window::Settings {
+        size: iced::Size::new(350.0, 350.0),
+        ..Default::default()
+    };
+
     iced::application("Rust BPM Analyzer", BpmApp::update, BpmApp::view)
-        .theme(|_| Theme::Dark)
-        .window_size((350.0, 350.0))
+        .theme(|_| Theme::Dracula)
         .subscription(BpmApp::subscription)
+        .window(window_settings)
         .run_with(BpmApp::new)?;
     Ok(())
 }
@@ -153,12 +160,15 @@ impl BpmApp {
         .width(Length::Fill)
         .style(|theme: &'_ Theme, status| {
             let palette = theme.palette();
-            let base = palette.primary;
+            let base = Color {
+                a: 0.9,
+                ..palette.primary
+            };
 
             let background = match status {
                 button::Status::Active => base,
-                button::Status::Hovered => Color { a: 0.9, ..base },
-                button::Status::Pressed => Color { a: 0.8, ..base },
+                button::Status::Hovered => Color { a: 0.75, ..base },
+                button::Status::Pressed => Color { a: 0.6, ..base },
                 button::Status::Disabled => Color::from_rgb(0.4, 0.4, 0.4),
             };
 

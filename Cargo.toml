@@ -19,4 +19,15 @@ gpio-cdev = "0.6.0"
 # On exclut Linux ARM/ARM64 (Raspberry Pi, Milk-V)
 [target.'cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))'.dependencies]
 iced = "0.13"
+image = "0.24" # Pour charger l'icône de la fenêtre
+
+[package.metadata.bundle]
+name = "BPM Analyzer"
+identifier = "com.killian.rust-bpm-analyzer"
+icon = ["assets/icon.png"]
+version = "0.1.0"
+copyright = "Copyright 2025 Killian PICOT"
+category = "Music"
+short_description = "BPM Analyzer with Ableton Link"
+osx_info_plist_extst = "./assets/Info.plist"
 

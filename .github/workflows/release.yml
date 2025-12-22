@@ -66,29 +66,49 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: |
           choco install llvm
+          choco install wix
 
       - name: Install Cross
         if: matrix.use_cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Build
+      - name: Install cargo-bundle
+        if: matrix.use_cross == false
+        run: cargo install cargo-bundle
+
+      - name: Build or Bundle
         shell: bash
         run: |
           if [ "${{ matrix.use_cross }}" == "true" ]; then
             echo "Building with Cross..."
             cross build --release --target ${{ matrix.target }} --verbose
+            # Rename binary for upload
+            cp target/${{ matrix.target }}/release/rust-bpm-analyzer rust-bpm-analyzer-${{ matrix.target }}
           else
-            echo "Building with Cargo..."
-            cargo build --release --target ${{ matrix.target }} --verbose
+            echo "Bundling with Cargo..."
+            cargo bundle --release --target ${{ matrix.target }} --verbose
+            
+            # Prepare artifacts based on OS
+            if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+              # Zip the .app bundle
+              cd "target/${{ matrix.target }}/release/bundle/osx/"
+              zip -r "rust-bpm-analyzer-${{ matrix.target }}.app.zip" "BPM Analyzer.app"
+              mv "rust-bpm-analyzer-${{ matrix.target }}.app.zip" "$GITHUB_WORKSPACE/"
+            elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+              # Copy MSI
+              find "target/${{ matrix.target }}/release/bundle/msi" -name "*.msi" -exec cp {} "$GITHUB_WORKSPACE/rust-bpm-analyzer-${{ matrix.target }}.msi" \;
+            else
+              # Copy Deb
+              find "target/${{ matrix.target }}/release/bundle/deb" -name "*.deb" -exec cp {} "$GITHUB_WORKSPACE/rust-bpm-analyzer-${{ matrix.target }}.deb" \;
+            fi
           fi
-
-      - name: Rename Binary
-        shell: bash
-        run: |
-          cp target/${{ matrix.target }}/release/rust-bpm-analyzer${{ matrix.extension }} rust-bpm-analyzer-${{ matrix.target }}${{ matrix.extension }}
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: rust-bpm-analyzer-${{ matrix.target }}${{ matrix.extension }}
+          files: |
+            rust-bpm-analyzer-${{ matrix.target }}
+            rust-bpm-analyzer-${{ matrix.target }}.app.zip
+            rust-bpm-analyzer-${{ matrix.target }}.msi
+            rust-bpm-analyzer-${{ matrix.target }}.deb
