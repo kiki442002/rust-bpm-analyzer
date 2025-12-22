@@ -24,7 +24,6 @@ pub struct AnalysisResult {
 pub struct NormalizationResult {
     pub energy_sum: f32,
     pub energy_mean: f32,
-    pub raw_max: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -327,7 +326,6 @@ impl BpmAnalyzer {
         NormalizationResult {
             energy_sum,
             energy_mean,
-            raw_max,
         }
     }
 

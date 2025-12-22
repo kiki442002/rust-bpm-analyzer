@@ -7,9 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::core_bpm::{AudioCapture, BpmAnalyzer, audio::AudioMessage};
 use crate::network_sync::LinkManager;
-
-const SAMPLE_RATE: u32 = 44100; // Desktop is always 44100 in this project
-const HOP_SIZE: usize = SAMPLE_RATE as usize;
+use crate::platform::{HOP_SIZE, SAMPLE_RATE};
 
 #[derive(Debug, Clone)]
 pub struct GuiUpdate {
