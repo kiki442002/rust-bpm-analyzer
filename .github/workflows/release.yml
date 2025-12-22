@@ -114,14 +114,7 @@ jobs:
             chmod +x linuxdeploy-x86_64.AppImage
             
             # Create temporary desktop file
-            cat > rust-bpm-analyzer.desktop <<EOF
-            [Desktop Entry]
-            Type=Application
-            Name=BPM Analyzer
-            Exec=rust-bpm-analyzer
-            Icon=icon
-            Categories=Audio;Music;
-            EOF
+            printf "[Desktop Entry]\nType=Application\nName=BPM Analyzer\nExec=rust-bpm-analyzer\nIcon=icon\nCategories=Audio;Music;\n" > rust-bpm-analyzer.desktop
             
             # Prepare AppDir
             mkdir -p AppDir/usr/bin
