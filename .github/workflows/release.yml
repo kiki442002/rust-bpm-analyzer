@@ -91,6 +91,7 @@ jobs:
             # Prepare artifacts based on OS
             if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
               # Zip the .app bundle
+              ./assets/build_mac.sh
               cd "target/${{ matrix.target }}/release/bundle/osx/"
               zip -r "rust-bpm-analyzer-${{ matrix.target }}.app.zip" "BPM Analyzer.app"
               mv "rust-bpm-analyzer-${{ matrix.target }}.app.zip" "$GITHUB_WORKSPACE/"
