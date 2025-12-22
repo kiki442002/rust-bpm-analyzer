@@ -21,6 +21,10 @@ gpio-cdev = "0.6.0"
 iced = "0.13"
 image = "0.24" # Pour charger l'icône de la fenêtre
 
+[build-dependencies]
+winres = "0.1"
+
+
 [package.metadata.bundle]
 name = "BPM Analyzer"
 identifier = "com.killian.rust-bpm-analyzer"

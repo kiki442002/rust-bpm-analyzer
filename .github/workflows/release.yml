@@ -72,35 +72,67 @@ jobs:
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Install cargo-bundle
-        if: matrix.use_cross == false
+        if: matrix.os == 'macos-latest' || (matrix.os == 'ubuntu-latest' && matrix.use_cross == false)
         run: cargo install cargo-bundle
 
       - name: Build or Bundle
         shell: bash
         run: |
           if [ "${{ matrix.use_cross }}" == "true" ]; then
+            # --- Linux ARM (Cross) ---
             echo "Building with Cross..."
-            cross build --release --target ${{ matrix.target }} 
-            # Rename binary for upload
+            cross build --release --target ${{ matrix.target }} --verbose
             cp target/${{ matrix.target }}/release/rust-bpm-analyzer rust-bpm-analyzer-${{ matrix.target }}
-          else
-            echo "Bundling with Cargo..."
-            cargo bundle --release --target ${{ matrix.target }} 
+
+          elif [ "${{ matrix.os }}" == "windows-latest" ]; then
+            # --- Windows (.exe only) ---
+            echo "Building .exe for Windows..."
+            cargo build --release --target ${{ matrix.target }} --verbose
+            cp target/${{ matrix.target }}/release/rust-bpm-analyzer.exe rust-bpm-analyzer-${{ matrix.target }}.exe
+
+          elif [ "${{ matrix.os }}" == "macos-latest" ]; then
+            # --- macOS (.app -> .dmg) ---
+            echo "Bundling for macOS..."
+            # Use the script to ensure Info.plist is patched
+            chmod +x assets/build_mac.sh
+            ./assets/build_mac.sh
             
-            # Prepare artifacts based on OS
-            if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-              # Zip the .app bundle
-              ./assets/build_mac.sh
-              cd "target/${{ matrix.target }}/release/bundle/osx/"
-              zip -r "rust-bpm-analyzer-${{ matrix.target }}.app.zip" "BPM Analyzer.app"
-              mv "rust-bpm-analyzer-${{ matrix.target }}.app.zip" "$GITHUB_WORKSPACE/"
-            elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-              # Copy MSI
-              find "target/${{ matrix.target }}/release/bundle/msi" -name "*.msi" -exec cp {} "$GITHUB_WORKSPACE/rust-bpm-analyzer-${{ matrix.target }}.msi" \;
-            else
-              # Copy Deb
-              find "target/${{ matrix.target }}/release/bundle/deb" -name "*.deb" -exec cp {} "$GITHUB_WORKSPACE/rust-bpm-analyzer-${{ matrix.target }}.deb" \;
-            fi
+            # Create DMG using hdiutil
+            hdiutil create -volname "BPM Analyzer" -srcfolder "target/${{ matrix.target }}/release/bundle/osx/BPM Analyzer.app" -ov -format UDZO "rust-bpm-analyzer-${{ matrix.target }}.dmg"
+
+          else
+            # --- Linux x64 (.deb + AppImage) ---
+            echo "Bundling for Linux..."
+            cargo bundle --release --target ${{ matrix.target }} --verbose
+            
+            # 1. Copy .deb
+            find "target/${{ matrix.target }}/release/bundle/deb" -name "*.deb" -exec cp {} "rust-bpm-analyzer-${{ matrix.target }}.deb" \;
+            
+            # 2. Generate AppImage
+            echo "Generating AppImage..."
+            wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+            chmod +x linuxdeploy-x86_64.AppImage
+            
+            # Create temporary desktop file
+            cat > rust-bpm-analyzer.desktop <<EOF
+            [Desktop Entry]
+            Type=Application
+            Name=BPM Analyzer
+            Exec=rust-bpm-analyzer
+            Icon=icon
+            Categories=Audio;Music;
+            EOF
+            
+            # Prepare AppDir
+            mkdir -p AppDir/usr/bin
+            cp "target/${{ matrix.target }}/release/rust-bpm-analyzer" AppDir/usr/bin/
+            cp assets/icon.png AppDir/icon.png
+            
+            # Run linuxdeploy
+            ./linuxdeploy-x86_64.AppImage --appdir AppDir --desktop-file rust-bpm-analyzer.desktop --icon-file assets/icon.png --output appimage
+            
+            # Rename output
+            mv "BPM_Analyzer-x86_64.AppImage" "rust-bpm-analyzer-${{ matrix.target }}.AppImage"
           fi
 
       - name: Upload Release Asset
@@ -109,6 +141,7 @@ jobs:
         with:
           files: |
             rust-bpm-analyzer-${{ matrix.target }}
-            rust-bpm-analyzer-${{ matrix.target }}.app.zip
-            rust-bpm-analyzer-${{ matrix.target }}.msi
+            rust-bpm-analyzer-${{ matrix.target }}.exe
+            rust-bpm-analyzer-${{ matrix.target }}.dmg
             rust-bpm-analyzer-${{ matrix.target }}.deb
+            rust-bpm-analyzer-${{ matrix.target }}.AppImage
