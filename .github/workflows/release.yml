@@ -80,12 +80,12 @@ jobs:
         run: |
           if [ "${{ matrix.use_cross }}" == "true" ]; then
             echo "Building with Cross..."
-            cross build --release --target ${{ matrix.target }} --verbose
+            cross build --release --target ${{ matrix.target }} 
             # Rename binary for upload
             cp target/${{ matrix.target }}/release/rust-bpm-analyzer rust-bpm-analyzer-${{ matrix.target }}
           else
             echo "Bundling with Cargo..."
-            cargo bundle --release --target ${{ matrix.target }} --verbose
+            cargo bundle --release --target ${{ matrix.target }} 
             
             # Prepare artifacts based on OS
             if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
