@@ -263,6 +263,9 @@ impl AudioWorker {
             cpal::SampleFormat::U16 => {
                 self.create_execution_stream::<u16>(&device, &config.into(), err_fn)?
             }
+            cpal::SampleFormat::U8 => {
+                self.create_execution_stream::<u8>(&device, &config.into(), err_fn)?
+            }
             sample_format => {
                 return Err(format!("Unsupported sample format: {:?}", sample_format).into());
             }
