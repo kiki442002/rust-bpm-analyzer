@@ -1,16 +1,27 @@
 #!/bin/bash
 set -e
 
+TARGET=$1
+
 # Si le script est lancé depuis le dossier assets, on remonte à la racine
 if [[ $(basename "$PWD") == "assets" ]]; then
     cd ..
 fi
 
 echo "Construction du projet et génération du bundle..."
-cargo bundle --release
+
+if [ -n "$TARGET" ]; then
+    echo "Target spécifiée : $TARGET"
+    cargo bundle --release --target "$TARGET"
+    BUNDLE_DIR="target/$TARGET/release/bundle/osx"
+else
+    echo "Build natif (pas de target spécifiée)"
+    cargo bundle --release
+    BUNDLE_DIR="target/release/bundle/osx"
+fi
 
 # Chemin vers le fichier Info.plist généré dans le .app
-PLIST_PATH="target/release/bundle/osx/BPM Analyzer.app/Contents/Info.plist"
+PLIST_PATH="$BUNDLE_DIR/BPM Analyzer.app/Contents/Info.plist"
 
 if [ ! -f "$PLIST_PATH" ]; then
     echo "Erreur : Le fichier Info.plist n'a pas été trouvé à l'emplacement : $PLIST_PATH"
@@ -27,4 +38,4 @@ else
 fi
 
 echo "✅ Terminé ! L'application est prête."
-echo "Vous pouvez la trouver ici : target/release/bundle/osx/BPM Analyzer.app"
+echo "Vous pouvez la trouver ici : $BUNDLE_DIR/BPM Analyzer.app"

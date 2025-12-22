@@ -95,7 +95,7 @@ jobs:
             echo "Bundling for macOS..."
             # Use the script to ensure Info.plist is patched
             chmod +x assets/build_mac.sh
-            ./assets/build_mac.sh
+            ./assets/build_mac.sh ${{ matrix.target }}
             
             # Create DMG using hdiutil
             hdiutil create -volname "BPM Analyzer" -srcfolder "target/${{ matrix.target }}/release/bundle/osx/BPM Analyzer.app" -ov -format UDZO "rust-bpm-analyzer-${{ matrix.target }}.dmg"
