@@ -30,12 +30,11 @@ impl LinkManager {
         }
 
         // Sync Phase on Drop (with 10s cooldown)
-        if is_drop && self.last_sync_time.elapsed().as_secs() > 10 {
-            if let Some(offset) = beat_offset {
-                println!("Drop detected! Syncing Downbeat (latency: {:?})...", offset);
-                self.sync_downbeat(offset);
-                self.last_sync_time = Instant::now();
-            }
+        if let Some(offset) =
+            beat_offset.filter(|_| is_drop && self.last_sync_time.elapsed().as_secs() > 10)
+        {
+            self.sync_downbeat(offset);
+            self.last_sync_time = Instant::now();
         }
     }
 
