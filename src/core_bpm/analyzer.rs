@@ -123,9 +123,9 @@ impl AudioFilter {
     ) -> Result<Self, String> {
         let mut chain = Vec::new();
 
-        // L'ordre doit être un multiple de 2 car chaque section biquad est d'ordre 2
-        // Si order = 2 -> 1 section
-        // Si order = 4 -> 2 sections
+        // The order must be a multiple of 2 because each biquad section is of order 2
+        // If order = 2 -> 1 section
+        // If order = 4 -> 2 sections
         let sections_count = match order {
             FilterOrder::Order2 => 1,
             FilterOrder::Order4 => 2,
@@ -200,17 +200,17 @@ pub struct BpmAnalyzer {
     // Configuration
     pub config: BpmAnalyzerConfig,
 
-    // Historique structuré (BPM, Energie, Temps)
+    // Structured history (BPM, Energy, Time)
     history: VecDeque<BpmHistoryEntry>,
 
     // Sampling Configs (Buffers + Rates)
     fine_config: SamplingConfig,
     coarse_config: SamplingConfig,
 
-    // Filtre Principal
+    // Main Filter
     input_filter: AudioFilter,
 
-    // Reference BPM (Lock sur Drop)
+    // Reference BPM (Lock on Drop)
     reference_bpm: f32,
 
     // Scratch buffers for memory optimization
@@ -229,14 +229,14 @@ impl BpmAnalyzer {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let config = config.unwrap_or_default();
 
-        // Stratégie Coarse-Fine
-        // Fine Rate : ~11000 Hz (Compromis Précision/CPU)
-        // Coarse Rate : ~500 Hz (Recherche rapide)
+        // Coarse-Fine Strategy
+        // Fine Rate : ~11000 Hz (Precision/CPU Trade-off)
+        // Coarse Rate : ~500 Hz (Fast Search)
 
-        // Pour 44100Hz : Step 4 => 11025 Hz. Pour 110025Hz : Step 1 => 110025Hz Hz.
+        // For 44100Hz : Step 4 => 11025 Hz. For 110025Hz : Step 1 => 110025Hz Hz.
         let fine_step = if sample_rate >= 44100 { 4 } else { 1 };
 
-        // Pour garder ~500Hz en Coarse :
+        // To keep ~500Hz in Coarse :
         // 11025 / 22 ~= 501 Hz.
         // 8000 / 16 = 500 Hz.
         let coarse_step = 22;
@@ -260,7 +260,7 @@ impl BpmAnalyzer {
             config.max_bpm,
         );
 
-        // Configuration du filtre principal : BandPass 50Hz - 250Hz
+        // Main filter configuration : BandPass 50Hz - 250Hz
         let input_filter = AudioFilter::new(
             FilterType::BandPass(50.0, 250.0),
             sample_rate as f32,
@@ -454,7 +454,7 @@ impl BpmAnalyzer {
     }
 
     fn check_energy_threshold(&self, current_energy: f32) -> Option<f32> {
-        // Calcul de l'énergie moyenne actuelle de l'historique
+        // Calculate current average energy of history
         let avg_history_energy = if self.history.is_empty() {
             0.0
         } else {
@@ -473,11 +473,11 @@ impl BpmAnalyzer {
     }
 
     fn check_drop(&self, samples: &[f32], threshold: Option<f32>) -> bool {
-        let split_index = (samples.len() * 3) / 4; // 75% du buffer
+        let split_index = (samples.len() * 3) / 4; // 75% of the buffer
 
         let threshold = threshold.unwrap_or(1.3);
 
-        // 1. Énergie de l'historique (0..75%)
+        // 1. History Energy (0..75%)
         let mut history_sum_sq = 0.0;
         for i in 0..split_index {
             let val = samples[i];
@@ -486,7 +486,7 @@ impl BpmAnalyzer {
         let history_count = split_index.max(1);
         let history_energy = history_sum_sq / history_count as f32;
 
-        // 2. Énergie récente (75%..100%)
+        // 2. Recent Energy (75%..100%)
         let mut recent_sum_sq = 0.0;
         for i in split_index..samples.len() {
             let val = samples[i];
@@ -495,32 +495,32 @@ impl BpmAnalyzer {
         let recent_count = (samples.len() - split_index).max(1);
         let current_energy = recent_sum_sq / recent_count as f32;
 
-        // 3. Détection
+        // 3. Detection
         (current_energy > history_energy * threshold) && (current_energy > 0.01)
     }
 
     fn update_and_check_reference(&mut self, bpm: f32, is_drop: bool) -> bool {
         if is_drop {
-            // Si c'est un Drop, on met à jour la référence
+            // If it's a Drop, update the reference
             self.reference_bpm = bpm;
             true
         } else if self.reference_bpm > 0.0 {
-            // Si ce n'est pas un Drop mais qu'on a une référence, on vérifie la cohérence
+            // If it's not a Drop but we have a reference, check consistency
             let test_ref = self.reference_bpm * 0.1;
             let is_close = (bpm - self.reference_bpm).abs() <= test_ref;
-            // Vérification des harmoniques (x2, /2, x3)
+            // Harmonic check (x2, /2, x3)
             let is_double = (bpm - self.reference_bpm * 2.0).abs() <= test_ref / 2.0;
             let is_half = (bpm - self.reference_bpm / 2.0).abs() <= test_ref * 2.0;
             let is_triple = (bpm - self.reference_bpm * 3.0).abs() <= test_ref / 3.0;
 
             if !is_close && !is_double && !is_half && !is_triple {
-                // BPM incohérent avec la référence -> On ignore cette détection
+                // BPM inconsistent with reference -> Ignore this detection
                 false
             } else {
                 true
             }
         } else {
-            // Pas de référence encore, on ignore
+            // No reference yet, ignore
             false
         }
     }
@@ -529,12 +529,12 @@ impl BpmAnalyzer {
         &mut self,
         new_samples: &[f32],
     ) -> Result<Option<AnalysisResult>, Box<dyn std::error::Error>> {
-        // 1. Filtrage et Downsampling (Input -> Fine)
+        // 1. Filtering and Downsampling (Input -> Fine)
         self.fine_config
             .update_buffer(new_samples, &mut self.scratch_processing, |chunk| {
                 let mut sum = 0.0;
                 for &x in chunk {
-                    // Application du filtre
+                    // Apply filter
                     let y = self.input_filter.process(x);
                     sum += y.abs(); // Rectification
                 }
@@ -542,8 +542,8 @@ impl BpmAnalyzer {
             });
 
         // 2. Downsampling (Fine -> Coarse)
-        // On utilise scratch_coarse_vec comme buffer temporaire pour la sortie de cette étape
-        // car il sera écrasé lors de la normalisation coarse juste après.
+        // Use scratch_coarse_vec as temporary buffer for this step output
+        // because it will be overwritten during coarse normalization right after.
         self.coarse_config.update_buffer(
             &self.scratch_processing,
             &mut self.scratch_coarse_vec,
@@ -553,13 +553,13 @@ impl BpmAnalyzer {
             },
         );
 
-        // On attend que le buffer soit plein
+        // Wait for buffer to be full
         if self.coarse_config.buffer.len() < self.coarse_config.buffer.capacity() {
             return Ok(None);
         }
 
         // ============================================================
-        // ÉTAPE 1 : RECHERCHE GROSSIÈRE (COARSE)
+        // STEP 1 : COARSE SEARCH
         // ============================================================
 
         let norm_res_coarse = Self::normalize_window(
@@ -583,7 +583,7 @@ impl BpmAnalyzer {
             Err(_) => return Ok(None),
         };
 
-        // Correction d'octave (Harmonic Check)
+        // Octave Correction (Harmonic Check)
         let best_lag_c = self.check_harmonics(
             best_lag_c,
             max_corr_c,
@@ -591,14 +591,14 @@ impl BpmAnalyzer {
             self.coarse_config.min_lag,
         );
         // ============================================================
-        // ÉTAPE 2 : RAFFINEMENT (FINE)
+        // STEP 2 : REFINEMENT (FINE)
         // ============================================================
 
-        // Conversion du Lag Coarse vers Fine
+        // Convert Coarse Lag to Fine
         // Ratio = fine_rate / coarse_rate = coarse_step
         let center_lag_f = best_lag_c * self.coarse_config.step;
 
-        // Fenêtre de recherche Fine
+        // Fine search window
         let search_radius = 50;
         let min_lag_f = center_lag_f.saturating_sub(search_radius);
         let max_lag_f = center_lag_f + search_radius;
@@ -609,7 +609,7 @@ impl BpmAnalyzer {
             &mut self.scratch_fine_centered,
         );
 
-        // On s'assure de rester dans les bornes du buffer
+        // Ensure we stay within buffer bounds
         let safe_max_lag = self.scratch_fine_centered.len().saturating_sub(1);
         let start_lag = min_lag_f.max(1);
         let end_lag = max_lag_f.min(safe_max_lag);
@@ -626,7 +626,7 @@ impl BpmAnalyzer {
         };
 
         // ============================================================
-        // ÉTAPE 3 : INTERPOLATION PARABOLIQUE
+        // STEP 3 : PARABOLIC INTERPOLATION
         // ============================================================
 
         let refined_lag = self.parabolic_interpolation(
@@ -637,23 +637,23 @@ impl BpmAnalyzer {
             end_lag,
         );
 
-        // Calcul final du BPM arrondi à 0.1 près
+        // Final BPM calculation rounded to nearest 0.1
         let bpm = (self.fine_config.rate * 60.0 / refined_lag * 10.0).round() / 10.0;
 
         // ============================================================
-        // DÉTECTION DE DROP (AMÉLIORÉE - Comparaison Intra-Fenêtre)
+        // DROP DETECTION (IMPROVED - Intra-Window Comparison)
         // ============================================================
-        // On calcule le Drop AVANT de valider le BPM pour l'historique
-        // On augmente le seuil (1.5 au lieu de 1.3) et on demande une confiance minimale
+        // Calculate Drop BEFORE validating BPM for history
+        // Increase threshold (1.5 instead of 1.3) and require minimal confidence
 
         let is_drop = confidence > 0.5 && self.check_drop(&self.scratch_fine_vec, Some(1.5));
 
         // ============================================================
-        // GESTION DE L'HISTORIQUE ET LISSAGE
+        // HISTORY MANAGEMENT AND SMOOTHING
         // ============================================================
 
         let now = Instant::now();
-        // 1. Reset si silence prolongé (> 10s)
+        // 1. Reset if prolonged silence (> 10s)
         if let Some(last_entry) = self.history.back() {
             if now.duration_since(last_entry.timestamp).as_secs_f32() > 10.0 {
                 self.history.clear();
@@ -661,18 +661,18 @@ impl BpmAnalyzer {
             }
         }
 
-        // 2. Vérification du seuil d'énergie adaptatif
+        // 2. Check adaptive energy threshold
         let avg_history_energy = match self.check_energy_threshold(norm_res_fine.energy_mean) {
             Some(e) => e,
             None => return Ok(None),
         };
 
-        // 4. Filtrage par Référence (Lock sur Drop)
+        // 4. Reference Filtering (Lock on Drop)
         if !self.update_and_check_reference(bpm, is_drop) {
             return Ok(None);
         }
 
-        // 5. Mise à jour de l'historique
+        // 5. Update history
         if self.history.len() >= 5 {
             self.history.pop_front();
         }
@@ -682,7 +682,7 @@ impl BpmAnalyzer {
             timestamp: now,
         });
 
-        // 6. Calcul des valeurs lissées
+        // 6. Calculate smoothed values
         // Median BPM
         self.scratch_bpm_sort.clear();
         self.scratch_bpm_sort
@@ -696,9 +696,9 @@ impl BpmAnalyzer {
             bpm
         };
 
-        // Calcul de l'offset précis du beat (Latence)
-        // Si c'est un Drop, on cherche le pic dans la section récente (derniers 25%)
-        // pour éviter de se caler sur un pic ancien.
+        // Calculate precise beat offset (Latency)
+        // If it's a Drop, search for peak in recent section (last 25%)
+        // to avoid locking onto an old peak.
         let search_start = if is_drop {
             (self.scratch_fine_vec.len() * 3) / 4
         } else {

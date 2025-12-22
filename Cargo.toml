@@ -1,7 +1,7 @@
 [package]
 name = "rust-bpm-analyzer"
 version = "0.0.1"
-edition = "2025"
+edition = "2024"
 authors = ["Killian PICOT"]
 description = "A real-time BPM analyzer with Ableton Link synchronization."
 license-file = "LICENSE"
@@ -16,15 +16,15 @@ rusty_link = "0.4.6"
 # DSP
 biquad = "0.5.0"
 
-# Dépendances spécifiques à Linux (Milk-V Duo, Raspberry Pi, Desktop Linux)
+# Linux specific dependencies (Milk-V Duo, Raspberry Pi, Desktop Linux)
 [target.'cfg(target_os = "linux")'.dependencies]
 gpio-cdev = "0.6.0"
 
-# GUI uniquement pour Desktop (Mac, Windows, Linux x86)
-# On exclut Linux ARM/ARM64 (Raspberry Pi, Milk-V)
+# GUI only for Desktop (Mac, Windows, Linux x86)
+# Exclude Linux ARM/ARM64 (Raspberry Pi, Milk-V)
 [target.'cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))'.dependencies]
 iced = "0.13"
-image = "0.24" # Pour charger l'icône de la fenêtre
+image = "0.24" # To load the window icon
 
 [build-dependencies]
 winres = "0.1"

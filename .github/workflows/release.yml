@@ -15,31 +15,31 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 1. Linux x86_64 (Natif)
+          # 1. Linux x86_64 (Native)
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             use_cross: false
             extension: ""
             
-          # 2. Windows (Natif - MSVC)
+          # 2. Windows (Native - MSVC)
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             use_cross: false
             extension: ".exe"
 
-          # 3. macOS (Natif)
+          # 3. macOS (Native)
           - target: aarch64-apple-darwin
             os: macos-latest
             use_cross: false
             extension: ""
 
-          # 4. Linux ARM64 (Cross obligatoire car runner Intel)
+          # 4. Linux ARM64 (Cross required because Intel runner)
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             use_cross: true
             extension: ""
 
-          # 5. Linux ARMv7 (Cross obligatoire car runner Intel)
+          # 5. Linux ARMv7 (Cross required because Intel runner)
           - target: armv7-unknown-linux-gnueabihf
             os: ubuntu-latest
             use_cross: true
@@ -54,14 +54,14 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # Dépendances pour Linux Natif (x86_64)
+      # Dependencies for Native Linux (x86_64)
       - name: Install Linux Dependencies
         if: matrix.os == 'ubuntu-latest' && matrix.use_cross == false
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev clang libclang-dev
 
-      # Dépendances pour Windows Natif
+      # Dependencies for Native Windows
       - name: Install Windows Dependencies
         if: matrix.os == 'windows-latest'
         run: |

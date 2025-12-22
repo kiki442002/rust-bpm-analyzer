@@ -3,42 +3,42 @@ set -e
 
 TARGET=$1
 
-# Si le script est lancé depuis le dossier assets, on remonte à la racine
+# If the script is run from the assets folder, go up to the root
 if [[ $(basename "$PWD") == "assets" ]]; then
     cd ..
 fi
 
-echo "Construction du projet et génération du bundle..."
+echo "Building project and generating bundle..."
 
 if [ -n "$TARGET" ]; then
-    echo "Target spécifiée : $TARGET"
+    echo "Target specified: $TARGET"
     cargo bundle --release --target "$TARGET"
     BUNDLE_DIR="target/$TARGET/release/bundle/osx"
 else
-    echo "Build natif (pas de target spécifiée)"
+    echo "Native build (no target specified)"
     cargo bundle --release
     BUNDLE_DIR="target/release/bundle/osx"
 fi
 
-# Chemin vers le fichier Info.plist généré dans le .app
+# Path to the Info.plist file generated in the .app
 PLIST_PATH="$BUNDLE_DIR/BPM Analyzer.app/Contents/Info.plist"
 
 if [ ! -f "$PLIST_PATH" ]; then
-    echo "Erreur : Le fichier Info.plist n'a pas été trouvé à l'emplacement : $PLIST_PATH"
+    echo "Error: Info.plist file not found at: $PLIST_PATH"
     exit 1
 fi
 
-echo "Ajout de la permission microphone dans $PLIST_PATH..."
+echo "Adding microphone permission to $PLIST_PATH..."
 
-# On utilise plutil pour insérer la clé. Si elle existe déjà (peu probable après un clean build), on la remplace.
+# Use plutil to insert the key. If it already exists (unlikely after a clean build), replace it.
 if plutil -extract NSMicrophoneUsageDescription xml1 -o - "$PLIST_PATH" > /dev/null 2>&1; then
-    plutil -replace NSMicrophoneUsageDescription -string "Cette application a besoin d'accéder au microphone pour analyser le BPM de la musique." "$PLIST_PATH"
+    plutil -replace NSMicrophoneUsageDescription -string "This application needs access to the microphone to analyze music BPM." "$PLIST_PATH"
 else
-    plutil -insert NSMicrophoneUsageDescription -string "Cette application a besoin d'accéder au microphone pour analyser le BPM de la musique." "$PLIST_PATH"
+    plutil -insert NSMicrophoneUsageDescription -string "This application needs access to the microphone to analyze music BPM." "$PLIST_PATH"
 fi
 
-echo "Re-signature de l'application (ad-hoc) pour éviter l'erreur 'endommagé'..."
+echo "Re-signing application (ad-hoc) to avoid 'damaged' error..."
 codesign --force --deep --sign - "$BUNDLE_DIR/BPM Analyzer.app"
 
-echo "✅ Terminé ! L'application est prête."
-echo "Vous pouvez la trouver ici : $BUNDLE_DIR/BPM Analyzer.app"
+echo "✅ Done! The application is ready."
+echo "You can find it here: $BUNDLE_DIR/BPM Analyzer.app"
