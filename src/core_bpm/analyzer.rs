@@ -17,7 +17,9 @@ pub struct AnalysisResult {
     pub coarse_confidence: f32,
     pub energy: f32,
     pub average_energy: f32,
+    pub raw_energy: f32,
     pub beat_offset: Option<Duration>,
+    pub max_rise: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -37,11 +39,11 @@ pub struct BpmAnalyzerConfig {
 impl Default for BpmAnalyzerConfig {
     fn default() -> Self {
         Self {
-            window_duration: Duration::from_secs(4),
-            min_bpm: 60.0,
+            window_duration: Duration::from_secs(2),
+            min_bpm: 100.0,
             max_bpm: 310.0,
             thresholds: ConfidenceThreshold {
-                fine_confidence: 0.3,
+                fine_confidence: 0.4,
                 coarse_confidence: 0.4,
             },
         }
@@ -206,12 +208,10 @@ pub struct BpmAnalyzer {
     // Sampling Configs (Buffers + Rates)
     fine_config: SamplingConfig,
     coarse_config: SamplingConfig,
+    raw_config: SamplingConfig,
 
     // Main Filter
     input_filter: AudioFilter,
-
-    // Reference BPM (Lock on Drop)
-    reference_bpm: f32,
 
     // Scratch buffers for memory optimization
     scratch_fine_vec: Vec<f32>,
@@ -234,7 +234,7 @@ impl BpmAnalyzer {
         // Coarse Rate : ~500 Hz (Fast Search)
 
         // For 44100Hz : Step 4 => 11025 Hz. For 110025Hz : Step 1 => 110025Hz Hz.
-        let fine_step = if sample_rate >= 44100 { 4 } else { 1 };
+        let fine_step = if sample_rate >= 44100 { 2 } else { 1 };
 
         // To keep ~500Hz in Coarse :
         // 11025 / 22 ~= 501 Hz.
@@ -259,10 +259,16 @@ impl BpmAnalyzer {
             config.min_bpm,
             config.max_bpm,
         );
-
-        // Main filter configuration : BandPass 50Hz - 250Hz
+        let raw_config = SamplingConfig::new(
+            fine_rate,
+            window_duration,
+            fine_step,
+            config.min_bpm,
+            config.max_bpm,
+        );
+        // Main filter configuration : BandPass 100Hz - 200Hz
         let input_filter = AudioFilter::new(
-            FilterType::BandPass(50.0, 250.0),
+            FilterType::BandPass(100.0, 500.0),
             sample_rate as f32,
             FilterOrder::Order4,
         )?;
@@ -277,17 +283,17 @@ impl BpmAnalyzer {
 
         Ok(Self {
             config,
-            history: VecDeque::with_capacity(5),
+            history: VecDeque::with_capacity(3),
             fine_config,
             coarse_config,
+            raw_config,
             input_filter,
-            reference_bpm: 0.0,
             scratch_fine_vec: Vec::with_capacity(4096),
             scratch_fine_centered: Vec::with_capacity(4096),
             scratch_coarse_vec: Vec::with_capacity(1024),
             scratch_coarse_centered: Vec::with_capacity(1024),
             scratch_processing: Vec::with_capacity(1024),
-            scratch_bpm_sort: Vec::with_capacity(5),
+            scratch_bpm_sort: Vec::with_capacity(3),
         })
     }
 
@@ -404,17 +410,8 @@ impl BpmAnalyzer {
         let half_lag = initial_lag / 2;
         if half_lag >= min_lag {
             let (best_half_lag, max_half_corr) = find_best_in_range(half_lag);
-            if max_half_corr > (initial_corr * 0.5) {
+            if max_half_corr > (initial_corr * 0.4) {
                 best_lag = best_half_lag;
-            }
-        }
-
-        // 2. Check 3x BPM (Third Lag)
-        let third_lag = initial_lag / 3;
-        if third_lag >= min_lag {
-            let (best_third_lag, max_third_corr) = find_best_in_range(third_lag);
-            if max_third_corr > (initial_corr * 0.6) {
-                best_lag = best_third_lag;
             }
         }
 
@@ -465,6 +462,7 @@ impl BpmAnalyzer {
         if !self.history.is_empty()
             && current_energy < (avg_history_energy * 0.9)
             && current_energy < 0.03
+            && current_energy > 0.06
         {
             return None;
         }
@@ -473,7 +471,7 @@ impl BpmAnalyzer {
     }
 
     fn check_drop(&self, samples: &[f32], threshold: Option<f32>) -> bool {
-        let split_index = (samples.len() * 3) / 4; // 75% of the buffer
+        let split_index = (samples.len()) / 2; // 50% of the buffer
 
         let threshold = threshold.unwrap_or(1.3);
 
@@ -496,33 +494,7 @@ impl BpmAnalyzer {
         let current_energy = recent_sum_sq / recent_count as f32;
 
         // 3. Detection
-        (current_energy > history_energy * threshold) && (current_energy > 0.01)
-    }
-
-    fn update_and_check_reference(&mut self, bpm: f32, is_drop: bool) -> bool {
-        if is_drop {
-            // If it's a Drop, update the reference
-            self.reference_bpm = bpm;
-            true
-        } else if self.reference_bpm > 0.0 {
-            // If it's not a Drop but we have a reference, check consistency
-            let test_ref = self.reference_bpm * 0.1;
-            let is_close = (bpm - self.reference_bpm).abs() <= test_ref;
-            // Harmonic check (x2, /2, x3)
-            let is_double = (bpm - self.reference_bpm * 2.0).abs() <= test_ref / 2.0;
-            let is_half = (bpm - self.reference_bpm / 2.0).abs() <= test_ref * 2.0;
-            let is_triple = (bpm - self.reference_bpm * 3.0).abs() <= test_ref / 3.0;
-
-            if !is_close && !is_double && !is_half && !is_triple {
-                // BPM inconsistent with reference -> Ignore this detection
-                false
-            } else {
-                true
-            }
-        } else {
-            // No reference yet, ignore
-            false
-        }
+        (current_energy > history_energy * threshold) && (current_energy > 0.04)
     }
 
     pub fn process(
@@ -553,8 +525,32 @@ impl BpmAnalyzer {
             },
         );
 
+        // 3. Update Raw Config (Input -> Raw)
+        // Reuse scratch_processing as temporary buffer
+        self.raw_config
+            .update_buffer(new_samples, &mut self.scratch_processing, |chunk| {
+                let mut sum_sq = 0.0;
+                for &x in chunk {
+                    sum_sq += x * x;
+                }
+                sum_sq / chunk.len() as f32
+            });
+
         // Wait for buffer to be full
         if self.coarse_config.buffer.len() < self.coarse_config.buffer.capacity() {
+            return Ok(None);
+        }
+
+        // ============================================================
+        // NOISE GATE (Pre-Analysis)
+        // ============================================================
+        // Check if there is enough signal volume to justify analysis.
+        // We use the raw buffer (amplitude envelope) to check the input level.
+        let raw_level =
+            self.raw_config.buffer.iter().sum::<f32>() / self.raw_config.buffer.len().max(1) as f32;
+
+        // Threshold: 0.005 (approx -46dB). Below this, we consider it silence/noise.
+        if raw_level < 0.005 {
             return Ok(None);
         }
 
@@ -646,7 +642,7 @@ impl BpmAnalyzer {
         // Calculate Drop BEFORE validating BPM for history
         // Increase threshold (1.5 instead of 1.3) and require minimal confidence
 
-        let is_drop = confidence > 0.5 && self.check_drop(&self.scratch_fine_vec, Some(1.5));
+        let is_drop = confidence > 0.6 && self.check_drop(&self.scratch_fine_vec, Some(1.5));
 
         // ============================================================
         // HISTORY MANAGEMENT AND SMOOTHING
@@ -657,7 +653,6 @@ impl BpmAnalyzer {
         if let Some(last_entry) = self.history.back() {
             if now.duration_since(last_entry.timestamp).as_secs_f32() > 10.0 {
                 self.history.clear();
-                self.reference_bpm = 0.0;
             }
         }
 
@@ -667,13 +662,8 @@ impl BpmAnalyzer {
             None => return Ok(None),
         };
 
-        // 4. Reference Filtering (Lock on Drop)
-        if !self.update_and_check_reference(bpm, is_drop) {
-            return Ok(None);
-        }
-
         // 5. Update history
-        if self.history.len() >= 5 {
+        if self.history.len() >= 3 {
             self.history.pop_front();
         }
         self.history.push_back(BpmHistoryEntry {
@@ -722,6 +712,10 @@ impl BpmAnalyzer {
         let latency_seconds = samples_since_peak as f32 / self.fine_config.rate;
         let beat_offset = Some(Duration::from_secs_f32(latency_seconds));
 
+        // Calculate Raw Energy (Unnormalized)
+        let raw_energy =
+            self.raw_config.buffer.iter().sum::<f32>() / self.raw_config.buffer.len().max(1) as f32;
+
         Ok(Some(AnalysisResult {
             bpm: smoothed_bpm,
             coarse_confidence: coarse_conf,
@@ -729,7 +723,9 @@ impl BpmAnalyzer {
             confidence,
             energy: norm_res_fine.energy_mean,
             average_energy: avg_history_energy,
+            raw_energy,
             beat_offset,
+            max_rise: max_energy,
         }))
     }
 }
