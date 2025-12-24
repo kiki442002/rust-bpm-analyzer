@@ -39,13 +39,15 @@ pub fn run_headless() -> Result<(), Box<dyn std::error::Error>> {
                     // Analyze the new chunk of data
                     if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
                         println!(
-                            "BPM: {:.1} | Drop: {} | Conf: {:.2} | CoarseConf: {:.2} | Energy: {:.4} | Avg: {:.4}",
+                            "BPM: {:.1} | Drop: {} | Conf: {:.2} | CoarseConf: {:.2} | Energy: {:.4} | Avg: {:.4} | Raw: {:.4} | Rise: {:.4}",
                             result.bpm,
                             result.is_drop,
                             result.confidence,
                             result.coarse_confidence,
                             result.energy,
                             result.average_energy,
+                            result.raw_energy,
+                            result.max_rise,
                         );
 
                         // Sync Ableton Link
