@@ -19,7 +19,7 @@ mod platform {
 
 #[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]
 mod platform {
-    pub const TARGET_SAMPLE_RATE: u32 = 44100;
+    pub const TARGET_SAMPLE_RATE: u32 = 48000;
 
     pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!("Starting GUI Mode...");

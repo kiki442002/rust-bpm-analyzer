@@ -320,7 +320,7 @@ fn run_analysis_loop(
                     Ok(new_analyzer) => {
                         analyzer = new_analyzer;
                         // Update HOP_SIZE to match 1 second of audio at new rate
-                        current_hop_size = rate as usize;
+                        current_hop_size = (rate / 2) as usize;
                         // Resize accumulator
                         if new_samples_accumulator.capacity() < current_hop_size {
                             new_samples_accumulator

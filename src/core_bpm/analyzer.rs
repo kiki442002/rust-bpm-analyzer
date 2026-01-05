@@ -1,4 +1,5 @@
 use biquad::*;
+use iced::widget::shader::wgpu::core::command::render_ffi::wgpu_render_pass_set_stencil_reference;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -39,7 +40,7 @@ pub struct BpmAnalyzerConfig {
 impl Default for BpmAnalyzerConfig {
     fn default() -> Self {
         Self {
-            window_duration: Duration::from_secs(2),
+            window_duration: Duration::from_millis(2000),
             min_bpm: 100.0,
             max_bpm: 310.0,
             thresholds: ConfidenceThreshold {
@@ -347,14 +348,25 @@ impl BpmAnalyzer {
         let start_lag = min_lag.max(1);
         let end_lag = max_lag.min(safe_max_lag);
 
-        let mut best_lag = 0;
-        let mut max_corr = 0.0;
-
+        let mut corrs = vec![0.0; end_lag + 1];
         for lag in start_lag..=end_lag {
             let mut corr = 0.0;
             for i in 0..(centered_signal.len() - lag) {
                 corr += centered_signal[i] * centered_signal[i + lag];
             }
+            corrs[lag] = corr;
+        }
+
+        // Lissage par moyenne mobile (fenêtre 3)
+        let mut corrs_smoothed = corrs.clone();
+        for lag in (start_lag + 1)..(end_lag - 1) {
+            corrs_smoothed[lag] = (corrs[lag - 1] + corrs[lag] + corrs[lag + 1]) / 3.0;
+        }
+
+        let mut best_lag = 0;
+        let mut max_corr = 0.0;
+        for lag in start_lag..=end_lag {
+            let corr = corrs_smoothed[lag];
             if corr > max_corr {
                 max_corr = corr;
                 best_lag = lag;
@@ -408,13 +420,48 @@ impl BpmAnalyzer {
 
         // 1. Check 2x BPM (Half Lag)
         let half_lag = initial_lag / 2;
+        println!(
+            "[DEBUG] check_harmonics: initial_lag={}, initial_corr={:.4}, half_lag={}, min_lag={}",
+            initial_lag, initial_corr, half_lag, min_lag
+        );
         if half_lag >= min_lag {
-            let (best_half_lag, max_half_corr) = find_best_in_range(half_lag);
-            if max_half_corr > (initial_corr * 0.4) {
+            // Recherche locale autour de half_lag (±5)
+            let mut max_half_corr = 0.0;
+            let mut best_half_lag = half_lag;
+            for lag in half_lag.saturating_sub(5)..=half_lag + 5 {
+                if lag < min_lag || lag >= centered_signal.len() {
+                    continue;
+                }
+                let mut corr = 0.0;
+                for i in 0..(centered_signal.len() - lag) {
+                    corr += centered_signal[i] * centered_signal[i + lag];
+                }
+                if corr > max_half_corr {
+                    max_half_corr = corr;
+                    best_half_lag = lag;
+                }
+            }
+            println!(
+                "[DEBUG] check_harmonics: initial_lag={}, initial_corr={:.4}, half_lag={}, best_half_lag={}, max_half_corr={:.4}, seuil={:.4}",
+                initial_lag,
+                initial_corr,
+                half_lag,
+                best_half_lag,
+                max_half_corr,
+                initial_corr * 0.3
+            );
+            if max_half_corr > (initial_corr * 0.3) {
+                println!(
+                    "[DEBUG] check_harmonics: Correction d'octave appliquée, on passe de lag {} à {}",
+                    best_lag, best_half_lag
+                );
                 best_lag = best_half_lag;
+            } else {
+                println!(
+                    "[DEBUG] check_harmonics: Pas de correction d'octave (max_half_corr trop faible)"
+                );
             }
         }
-
         best_lag
     }
 
@@ -579,13 +626,21 @@ impl BpmAnalyzer {
             Err(_) => return Ok(None),
         };
 
-        // Octave Correction (Harmonic Check)
-        let best_lag_c = self.check_harmonics(
+        // Correction d'octave sur le lag coarse (avant passage au fin, value);
+        println!("coarse best lag: {}", best_lag_c);
+        let best_lag_c_harm = self.check_harmonics(
             best_lag_c,
             max_corr_c,
             &self.scratch_coarse_centered,
             self.coarse_config.min_lag,
         );
+        if best_lag_c != best_lag_c_harm {
+            println!(
+                "[DEBUG] process: Correction d'octave appliquée sur coarse, lag {} -> {}",
+                best_lag_c, best_lag_c_harm
+            );
+        }
+        let best_lag_c = best_lag_c_harm;
         // ============================================================
         // STEP 2 : REFINEMENT (FINE)
         // ============================================================
