@@ -1,119 +1,339 @@
+//! Logic for analyzing audio buffers to find the BPM.
+//! This is a direct port of the Python implementation, with optimizations.
+
+use crate::core_bpm::bpm_pattern::BpmPattern;
 use biquad::*;
-use iced::widget::shader::wgpu::core::command::render_ffi::wgpu_render_pass_set_stencil_reference;
-use std::collections::VecDeque;
-use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Copy)]
-struct BpmHistoryEntry {
-    bpm: f32,
-    energy: f32,
-    timestamp: Instant,
+const TARGET_SAMPLE_RATE: f32 = 11025.0;
+const ANALYSIS_BUFFER_SECONDS: f32 = 10.0;
+const ANALYSIS_BUFFER_SIZE: usize = (TARGET_SAMPLE_RATE * ANALYSIS_BUFFER_SECONDS) as usize;
+
+/// The main analyzer struct.
+pub struct BpmAnalyzer {
+    /// Bandpass filter to isolate the relevant frequencies for beat detection.
+    filter: AudioFilter,
+    /// Coarse BPM patterns (e.g., 100, 101, 102 BPM).
+    pattern_coarse: BpmPattern,
+    /// Fine BPM patterns for more precise detection (e.g., 100.1, 100.2 BPM).
+    pattern_fine: BpmPattern,
+    /// Internal buffer to store the filtered audio signal.
+    audio_buffer: Vec<f32>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct AnalysisResult {
-    pub bpm: f32,
-    pub is_drop: bool,
-    pub confidence: f32,
-    pub coarse_confidence: f32,
-    pub energy: f32,
-    pub average_energy: f32,
-    pub raw_energy: f32,
-    pub beat_offset: Option<Duration>,
-    pub max_rise: f32,
-}
+impl BpmAnalyzer {
+    /// Creates a new `BpmAnalyzer`.
+    ///
+    /// It loads the embedded BPM patterns and initializes the audio filter.
+    pub fn new() -> Result<Self, String> {
+        println!("[BPM ANALYZER] Initializing...");
+        let pattern_coarse =
+            super::bpm_pattern::BpmPattern::generate(130.0, 230.0, 0.25, 11025 / 2 / 20, 11025);
+        let pattern_fine =
+            super::bpm_pattern::BpmPattern::generate(130.0, 230.0, 0.05, 11025 / 2 / 20, 11025);
 
-#[derive(Debug, Clone, Copy)]
-pub struct NormalizationResult {
-    pub energy_sum: f32,
-    pub energy_mean: f32,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct BpmAnalyzerConfig {
-    pub window_duration: Duration,
-    pub min_bpm: f32,
-    pub max_bpm: f32,
-    pub thresholds: ConfidenceThreshold,
-}
-
-impl Default for BpmAnalyzerConfig {
-    fn default() -> Self {
-        Self {
-            window_duration: Duration::from_millis(2000),
-            min_bpm: 100.0,
-            max_bpm: 310.0,
-            thresholds: ConfidenceThreshold {
-                fine_confidence: 0.4,
-                coarse_confidence: 0.4,
-            },
+        // Ensure patterns are compatible with the target sample rate.
+        if pattern_coarse.frame_rate as f32 != TARGET_SAMPLE_RATE
+            || pattern_fine.frame_rate as f32 != TARGET_SAMPLE_RATE
+        {
+            let err_msg = format!(
+                "BPM patterns are for {} Hz, but analyzer requires {} Hz.",
+                pattern_coarse.frame_rate, TARGET_SAMPLE_RATE
+            );
+            println!("[BPM ANALYZER] Error: {}", err_msg);
+            return Err(err_msg);
         }
-    }
-}
 
-#[derive(Clone, Copy, Debug)]
-#[allow(dead_code)]
-pub enum FilterType {
-    LowPass(f32),       // Cutoff
-    HighPass(f32),      // Cutoff
-    BandPass(f32, f32), // Low Cutoff, High Cutoff
-}
+        // The python implementation uses a 6th order butterworth filter.
+        // A 4th order biquad filter is a good approximation.
+        let filter = AudioFilter::new(
+            FilterType::BandPass(60.0, 3000.0),
+            TARGET_SAMPLE_RATE,
+            FilterOrder::Order4,
+        )?;
+        println!("[BPM ANALYZER] Filter created.");
 
-#[derive(Clone, Copy, Debug)]
-#[allow(dead_code)]
-pub enum FilterOrder {
-    Order2,
-    Order4,
-}
-#[derive(Clone, Copy, Debug)]
-pub struct ConfidenceThreshold {
-    pub fine_confidence: f32,
-    pub coarse_confidence: f32,
-}
-
-#[derive(Clone, Debug)]
-pub struct SamplingConfig {
-    pub buffer: VecDeque<f32>,
-    pub rate: f32,
-    pub step: usize,
-    pub min_lag: usize,
-    pub max_lag: usize,
-}
-impl SamplingConfig {
-    pub fn new(rate: f32, duration: Duration, step: usize, min_bpm: f32, max_bpm: f32) -> Self {
-        let capacity = (rate * duration.as_secs_f32()) as usize;
-        let min_lag = (rate * 60.0 / max_bpm) as usize;
-        let max_lag = (rate * 60.0 / min_bpm) as usize;
-
-        Self {
-            buffer: VecDeque::with_capacity(capacity),
-            rate,
-            step,
-            min_lag,
-            max_lag,
-        }
+        println!("[BPM ANALYZER] Initialization successful.");
+        Ok(Self {
+            filter,
+            pattern_coarse,
+            pattern_fine,
+            audio_buffer: Vec::with_capacity(ANALYSIS_BUFFER_SIZE),
+        })
     }
 
-    pub fn update_buffer<F>(&mut self, samples: &[f32], output: &mut Vec<f32>, mut transform: F)
-    where
-        F: FnMut(&[f32]) -> f32,
-    {
-        output.clear();
+    /// Analyzes an audio buffer to detect the BPM.
+    ///
+    /// The input buffer should be mono audio at 11025 Hz.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<f32>` with the detected BPM if successful.
+    pub fn process(&mut self, audio_buffer: &[f32]) -> Option<f32> {
+        // 1. Filter and append new audio samples
+        self.audio_buffer
+            .extend(audio_buffer.iter().map(|s| self.filter.process(*s)));
 
-        for chunk in samples.chunks(self.step) {
-            let val = transform(chunk);
-            output.push(val);
+        // 2. Keep the buffer size within the `ANALYSIS_BUFFER_SIZE` limit (sliding window)
+        if self.audio_buffer.len() > ANALYSIS_BUFFER_SIZE {
+            let drain_count = self.audio_buffer.len() - ANALYSIS_BUFFER_SIZE;
+            self.audio_buffer.drain(0..drain_count);
         }
 
-        for &sample in output.iter() {
-            if self.buffer.len() >= self.buffer.capacity() {
-                self.buffer.pop_front();
+        // 3. Check if we have enough data to perform an analysis.
+        // The `search_beat_events` function requires at least `step_size` samples.
+        let step_size = (self.pattern_coarse.frame_rate / 2) as usize;
+        if self.audio_buffer.len() < step_size {
+            println!(
+                "[BPM ANALYZER] Buffer too small ({}), need at least {}. Waiting for more audio.",
+                self.audio_buffer.len(),
+                step_size
+            );
+            return None;
+        }
+
+        println!(
+            "[BPM ANALYZER] Processing buffer of size: {}",
+            self.audio_buffer.len()
+        );
+
+        // 4. Perform the two-pass (coarse, then fine) BPM search
+        self.search_bpm(&self.audio_buffer)
+    }
+
+    /// The core search logic, ported from the Python implementation.
+    fn search_bpm(&self, signal: &[f32]) -> Option<f32> {
+        // --- Pass 1: Coarse BPM Search ---
+        println!("[BPM ANALYZER] Starting coarse BPM search...");
+
+        // Detect beat events (energy peaks) in the signal
+        let beat_events = self.search_beat_events(signal);
+        println!("[BPM ANALYZER] Found {} beat events.", beat_events.len());
+        if beat_events.is_empty() {
+            println!("[BPM ANALYZER] No beat events found, aborting.");
+            return None;
+        }
+
+        // Correlate beat events with the coarse pattern
+        let bpm_container_coarse = self.bpm_container(&beat_events, &self.pattern_coarse.data);
+        let bpm_container_wrapped_coarse =
+            self.wrap_bpm_container(&bpm_container_coarse, self.pattern_coarse.data.len());
+        let bpm_container_final_coarse = self.finalise_bpm_container(&bpm_container_wrapped_coarse);
+
+        // Find the most likely BPM index from the coarse search
+        let bpm_wrapped_coarse = self.get_bpm_wrapped(&bpm_container_final_coarse);
+        println!(
+            "[BPM ANALYZER] Coarse BPM wrapped result: {:?}",
+            bpm_wrapped_coarse
+        );
+
+        // Check if the result is valid
+        let is_valid = self.check_bpm_wrapped(&bpm_wrapped_coarse, &bpm_container_final_coarse);
+        println!("[BPM ANALYZER] Coarse BPM result is valid: {}", is_valid);
+        if !is_valid {
+            return None;
+        }
+
+        // --- Pass 2: Fine BPM Search ---
+        println!("[BPM ANALYZER] Starting fine BPM search...");
+
+        // Determine the window in the fine pattern to search, based on the coarse result
+        let (fine_start, fine_end) = self.get_bpm_pattern_fine_window(&bpm_wrapped_coarse);
+        println!(
+            "[BPM ANALYZER] Fine BPM search window: {} to {}",
+            fine_start, fine_end
+        );
+        if fine_start >= fine_end {
+            println!("[BPM ANALYZER] Invalid fine window, aborting.");
+            return None;
+        }
+        let fine_pattern_window = &self.pattern_fine.data[fine_start..fine_end];
+
+        // Correlate beat events with the fine pattern window
+        let bpm_container_fine = self.bpm_container(&beat_events, fine_pattern_window);
+        let bpm_container_wrapped_fine =
+            self.wrap_bpm_container(&bpm_container_fine, fine_pattern_window.len());
+        let bpm_container_final_fine = self.finalise_bpm_container(&bpm_container_wrapped_fine);
+
+        // Find the most likely BPM index from the fine search
+        let bpm_wrapped_fine = self.get_bpm_wrapped(&bpm_container_final_fine);
+        println!(
+            "[BPM ANALYZER] Fine BPM wrapped result: {:?}",
+            bpm_wrapped_fine
+        );
+
+        // In Python, the second pass check was more lenient. Here we just check for emptiness.
+        if bpm_wrapped_fine.is_empty() {
+            println!("[BPM ANALYZER] No fine BPM result found, aborting.");
+            return None;
+        }
+
+        // --- Finalization ---
+
+        // Convert the coarse and fine indices to a final BPM value
+        let bpm_float =
+            self.bpm_indices_to_float(bpm_wrapped_coarse[0], fine_start + bpm_wrapped_fine[0]);
+        println!("[BPM ANALYZER] Final BPM: {}", bpm_float);
+
+        Some(bpm_float)
+    }
+
+    /// Detects prominent beat events in the audio signal.
+    /// This is equivalent to finding the `argmax` in sliding windows.
+    fn search_beat_events(&self, signal: &[f32]) -> Vec<usize> {
+        let step_size = (self.pattern_coarse.frame_rate / 2) as usize;
+        if signal.len() < step_size {
+            return Vec::new();
+        }
+
+        signal
+            .windows(step_size)
+            .step_by(step_size)
+            .enumerate()
+            .map(|(i, window)| {
+                let max_pos = window
+                    .iter()
+                    .enumerate()
+                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(0);
+                i * step_size + max_pos
+            })
+            .collect()
+    }
+
+    /// Correlates beat events with BPM patterns.
+    /// This is an optimized version of the Python `bpm_container` function.
+    fn bpm_container(
+        &self,
+        beat_events: &[usize],
+        bpm_pattern: &[Vec<Vec<u32>>],
+    ) -> Vec<Vec<usize>> {
+        let steps = bpm_pattern.len();
+        let mut bpm_container: Vec<Vec<usize>> = vec![Vec::new(); beat_events.len() * steps];
+
+        for (i, &beat_event) in beat_events.iter().enumerate() {
+            let beat_event_s = beat_event as isize;
+            let lower_bound = (beat_event_s - 20).max(0) as u32;
+            let upper_bound = (beat_event_s + 20) as u32;
+
+            for q in 0..steps {
+                // q is bpm_index
+                for (x, pattern) in bpm_pattern[q].iter().enumerate() {
+                    // x is lengh_index
+                    // Use binary search (partition_point) to find matches efficiently,
+                    // since the inner `pattern` vector is sorted.
+                    let start_idx = pattern.partition_point(|&p| p < lower_bound);
+                    let end_idx = pattern.partition_point(|&p| p <= upper_bound);
+                    let count = end_idx - start_idx;
+
+                    if count > 0 {
+                        // Push `x` (the lengh_index) `count` times.
+                        let sub_container = &mut bpm_container[i * steps + q];
+                        sub_container.resize(sub_container.len() + count, x);
+                    }
+                }
             }
-            self.buffer.push_back(sample);
         }
+        bpm_container
+    }
+
+    /// Reorganizes the container to group results by BPM hypothesis.
+    fn wrap_bpm_container(&self, bpm_container: &[Vec<usize>], steps: usize) -> Vec<Vec<usize>> {
+        let mut bpm_container_wrapped: Vec<Vec<usize>> = vec![Vec::new(); steps];
+        for i in 0..steps {
+            for j in (i..bpm_container.len()).step_by(steps) {
+                bpm_container_wrapped[i].extend_from_slice(&bpm_container[j]);
+            }
+        }
+        bpm_container_wrapped
+    }
+
+    /// Counts the most frequent "lengh_index" for each BPM hypothesis.
+    fn finalise_bpm_container(&self, bpm_container_wrapped: &[Vec<usize>]) -> Vec<usize> {
+        bpm_container_wrapped
+            .iter()
+            .map(|w| {
+                if w.is_empty() {
+                    return 0;
+                }
+                let mut counts = std::collections::HashMap::new();
+                for &val in w {
+                    *counts.entry(val).or_insert(0) += 1;
+                }
+                // Return the count of the most frequent element.
+                counts.into_values().max().unwrap_or(0)
+            })
+            .collect()
+    }
+
+    /// Finds the index/indices corresponding to the highest score.
+    fn get_bpm_wrapped(&self, bpm_container_final: &[usize]) -> Vec<usize> {
+        let max_val = match bpm_container_final.iter().max() {
+            Some(&v) => v,
+            None => return Vec::new(),
+        };
+
+        if max_val == 0 {
+            return Vec::new();
+        }
+
+        bpm_container_final
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &v)| if v == max_val { Some(i) } else { None })
+            .collect()
+    }
+
+    /// Checks if the coarse BPM result is valid.
+    /// Ported directly from the Python implementation's logic.
+    fn check_bpm_wrapped(&self, bpm_wrapped: &[usize], bpm_container_final: &[usize]) -> bool {
+        if bpm_wrapped.is_empty() {
+            return false;
+        }
+        // In python: `count > 1 or bpm_container_final[int(bpm_wrapped[0][0])] < 6` means failure.
+        // So success is: `count == 1 and score >= 6`.
+        let count = bpm_wrapped.len();
+        let score = bpm_container_final[bpm_wrapped[0]];
+
+        count == 1 && score >= 6
+    }
+
+    /// Calculates the search window within the fine pattern based on the coarse result.
+    /// Ported directly from the Python implementation's logic.
+    fn get_bpm_pattern_fine_window(&self, bpm_wrapped_coarse: &[usize]) -> (usize, usize) {
+        if bpm_wrapped_coarse.is_empty() {
+            return (0, 0);
+        }
+        // Formula from python: `int(((bpm_wrapped[0][0] / 4) / 0.05) - 20)`
+        let coarse_index = bpm_wrapped_coarse[0];
+        let coarse_bpm_value = self.pattern_coarse.start_bpm - 2.0
+            + ((coarse_index) as f32 * self.pattern_coarse.step);
+        println!(
+            "[BPM ANALYZER] Coarse BPM value for fine window calculation: {}",
+            coarse_bpm_value
+        );
+
+        let fine_equivalent_index = ((coarse_bpm_value - (self.pattern_fine.start_bpm - 10.0))
+            / self.pattern_fine.step)
+            .round() as isize;
+
+        let start = (fine_equivalent_index - 20).max(0) as usize;
+        let end = (start + 40).min(self.pattern_fine.data.len());
+
+        (start, end)
+    }
+
+    /// Converts the final coarse and fine indices to a BPM value.
+    fn bpm_indices_to_float(&self, _coarse_index: usize, fine_index: usize) -> f32 {
+        // Ajout du /4 pour coller à la logique Python
+        let bpm_float =
+            self.pattern_fine.start_bpm - 10.0 + ((fine_index) as f32 * self.pattern_fine.step);
+        // Arrondi à 2 décimales
+        (bpm_float * 100.0).round() / 100.0
     }
 }
 
+/// A simple wrapper for a biquad filter chain.
 pub struct AudioFilter {
     chain: Vec<DirectForm2Transposed<f32>>,
 }
@@ -125,662 +345,45 @@ impl AudioFilter {
         order: FilterOrder,
     ) -> Result<Self, String> {
         let mut chain = Vec::new();
-
-        // The order must be a multiple of 2 because each biquad section is of order 2
-        // If order = 2 -> 1 section
-        // If order = 4 -> 2 sections
         let sections_count = match order {
             FilterOrder::Order2 => 1,
-            FilterOrder::Order4 => 2,
+            FilterOrder::Order4 => 2, // 2 sections for a 4th order filter
         };
 
         for _ in 0..sections_count {
-            match filter_type {
-                FilterType::LowPass(cutoff) => {
-                    let fs = Hertz::<f32>::from_hz(sample_rate)
-                        .map_err(|_| "Invalid sample rate".to_string())?;
-                    let f0 = Hertz::<f32>::from_hz(cutoff)
-                        .map_err(|_| "Invalid cutoff frequency".to_string())?;
+            let FilterType::BandPass(low, high) = filter_type;
+            let fs = Hertz::<f32>::from_hz(sample_rate).map_err(|e| format!("{:?}", e))?;
+            let f_low = Hertz::<f32>::from_hz(low).map_err(|e| format!("{:?}", e))?;
+            let f_high = Hertz::<f32>::from_hz(high).map_err(|e| format!("{:?}", e))?;
 
-                    let coeffs =
-                        Coefficients::<f32>::from_params(Type::LowPass, fs, f0, Q_BUTTERWORTH_F32)
-                            .map_err(|e| format!("LP Error: {:?}", e))?;
-                    chain.push(DirectForm2Transposed::<f32>::new(coeffs));
-                }
-                FilterType::HighPass(cutoff) => {
-                    let fs = Hertz::<f32>::from_hz(sample_rate)
-                        .map_err(|_| "Invalid sample rate".to_string())?;
-                    let f0 = Hertz::<f32>::from_hz(cutoff)
-                        .map_err(|_| "Invalid cutoff frequency".to_string())?;
+            // Create a high-pass and a low-pass to form a band-pass
+            let hp_coeffs =
+                Coefficients::<f32>::from_params(Type::HighPass, fs, f_low, Q_BUTTERWORTH_F32)
+                    .map_err(|e| format!("{:?}", e))?;
+            chain.push(DirectForm2Transposed::<f32>::new(hp_coeffs));
 
-                    let coeffs =
-                        Coefficients::<f32>::from_params(Type::HighPass, fs, f0, Q_BUTTERWORTH_F32)
-                            .map_err(|e| format!("HP Error: {:?}", e))?;
-                    chain.push(DirectForm2Transposed::<f32>::new(coeffs));
-                }
-                FilterType::BandPass(low, high) => {
-                    let fs = Hertz::<f32>::from_hz(sample_rate)
-                        .map_err(|_| "Invalid sample rate".to_string())?;
-                    let f_low = Hertz::<f32>::from_hz(low)
-                        .map_err(|_| "Invalid low cutoff frequency".to_string())?;
-                    let f_high = Hertz::<f32>::from_hz(high)
-                        .map_err(|_| "Invalid high cutoff frequency".to_string())?;
-
-                    let hp_coeffs = Coefficients::<f32>::from_params(
-                        Type::HighPass,
-                        fs,
-                        f_low,
-                        Q_BUTTERWORTH_F32,
-                    )
-                    .map_err(|e| format!("BP-HP Error: {:?}", e))?;
-
-                    let lp_coeffs = Coefficients::<f32>::from_params(
-                        Type::LowPass,
-                        fs,
-                        f_high,
-                        Q_BUTTERWORTH_F32,
-                    )
-                    .map_err(|e| format!("BP-LP Error: {:?}", e))?;
-
-                    chain.push(DirectForm2Transposed::<f32>::new(hp_coeffs));
-                    chain.push(DirectForm2Transposed::<f32>::new(lp_coeffs));
-                }
-            }
+            let lp_coeffs =
+                Coefficients::<f32>::from_params(Type::LowPass, fs, f_high, Q_BUTTERWORTH_F32)
+                    .map_err(|e| format!("{:?}", e))?;
+            chain.push(DirectForm2Transposed::<f32>::new(lp_coeffs));
         }
-
         Ok(Self { chain })
     }
+
     fn process(&mut self, sample: f32) -> f32 {
-        let mut out = sample;
-        for filter in &mut self.chain {
-            out = filter.run(out);
-        }
-        out
+        self.chain
+            .iter_mut()
+            .fold(sample, |acc, filter| filter.run(acc))
     }
 }
 
-pub struct BpmAnalyzer {
-    // Configuration
-    pub config: BpmAnalyzerConfig,
-
-    // Structured history (BPM, Energy, Time)
-    history: VecDeque<BpmHistoryEntry>,
-
-    // Sampling Configs (Buffers + Rates)
-    fine_config: SamplingConfig,
-    coarse_config: SamplingConfig,
-    raw_config: SamplingConfig,
-
-    // Main Filter
-    input_filter: AudioFilter,
-
-    // Scratch buffers for memory optimization
-    scratch_fine_vec: Vec<f32>,
-    scratch_fine_centered: Vec<f32>,
-    scratch_coarse_vec: Vec<f32>,
-    scratch_coarse_centered: Vec<f32>,
-    scratch_processing: Vec<f32>,
-    scratch_bpm_sort: Vec<f32>,
+#[derive(Clone, Copy, Debug)]
+pub enum FilterType {
+    BandPass(f32, f32), // Low Cutoff, High Cutoff
 }
 
-impl BpmAnalyzer {
-    pub fn new(
-        sample_rate: u32,
-        config: Option<BpmAnalyzerConfig>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let config = config.unwrap_or_default();
-
-        // Coarse-Fine Strategy
-        // Fine Rate : ~11000 Hz (Precision/CPU Trade-off)
-        // Coarse Rate : ~500 Hz (Fast Search)
-
-        // For 44100Hz : Step 4 => 11025 Hz. For 110025Hz : Step 1 => 110025Hz Hz.
-        let fine_step = if sample_rate >= 44100 { 2 } else { 1 };
-
-        // To keep ~500Hz in Coarse :
-        // 11025 / 22 ~= 501 Hz.
-        // 8000 / 16 = 500 Hz.
-        let coarse_step = 22;
-
-        let fine_rate = sample_rate as f32 / fine_step as f32;
-        let coarse_rate = fine_rate / coarse_step as f32;
-        let window_duration = config.window_duration;
-
-        let fine_config = SamplingConfig::new(
-            fine_rate,
-            window_duration,
-            fine_step,
-            config.min_bpm,
-            config.max_bpm,
-        );
-        let coarse_config = SamplingConfig::new(
-            coarse_rate,
-            window_duration,
-            coarse_step,
-            config.min_bpm,
-            config.max_bpm,
-        );
-        let raw_config = SamplingConfig::new(
-            fine_rate,
-            window_duration,
-            fine_step,
-            config.min_bpm,
-            config.max_bpm,
-        );
-        // Main filter configuration : BandPass 100Hz - 200Hz
-        let input_filter = AudioFilter::new(
-            FilterType::BandPass(100.0, 500.0),
-            sample_rate as f32,
-            FilterOrder::Order4,
-        )?;
-
-        println!("BPM Analyzer Configured:");
-        println!("  Sample Rate: {} Hz", sample_rate);
-        println!("  Fine Rate: {:.2} Hz (Step {})", fine_rate, fine_step);
-        println!(
-            "  Coarse Rate: {:.2} Hz (Step {})",
-            coarse_rate, coarse_step
-        );
-
-        Ok(Self {
-            config,
-            history: VecDeque::with_capacity(3),
-            fine_config,
-            coarse_config,
-            raw_config,
-            input_filter,
-            scratch_fine_vec: Vec::with_capacity(4096),
-            scratch_fine_centered: Vec::with_capacity(4096),
-            scratch_coarse_vec: Vec::with_capacity(1024),
-            scratch_coarse_centered: Vec::with_capacity(1024),
-            scratch_processing: Vec::with_capacity(1024),
-            scratch_bpm_sort: Vec::with_capacity(3),
-        })
-    }
-
-    fn normalize_window(
-        buffer: &VecDeque<f32>,
-        out_vec: &mut Vec<f32>,
-        out_centered: &mut Vec<f32>,
-    ) -> NormalizationResult {
-        out_vec.clear();
-        out_vec.extend(buffer.iter());
-
-        // 1. Find Max
-        let raw_max = out_vec.iter().cloned().fold(0.0 / 0.0, f32::max);
-
-        // 2. Normalize to 0..1
-        if raw_max > 0.0 {
-            for x in out_vec.iter_mut() {
-                *x /= raw_max;
-            }
-        }
-
-        // 3. Center (Remove DC offset)
-        let mean: f32 = out_vec.iter().sum::<f32>() / out_vec.len() as f32;
-
-        out_centered.clear();
-        out_centered.extend(out_vec.iter().map(|x| x - mean));
-
-        // 4. Calculate Energy
-        let energy_sum: f32 = out_centered.iter().map(|x| x * x).sum();
-        let energy_mean = if !out_centered.is_empty() {
-            energy_sum / out_centered.len() as f32
-        } else {
-            0.0
-        };
-
-        NormalizationResult {
-            energy_sum,
-            energy_mean,
-        }
-    }
-
-    fn search_correlation(
-        &self,
-        centered_signal: &[f32],
-        energy: f32,
-        min_lag: usize,
-        max_lag: usize,
-        min_confidence: f32,
-    ) -> Result<(usize, f32, f32), &'static str> {
-        let safe_max_lag = centered_signal.len().saturating_sub(1);
-        let start_lag = min_lag.max(1);
-        let end_lag = max_lag.min(safe_max_lag);
-
-        let mut corrs = vec![0.0; end_lag + 1];
-        for lag in start_lag..=end_lag {
-            let mut corr = 0.0;
-            for i in 0..(centered_signal.len() - lag) {
-                corr += centered_signal[i] * centered_signal[i + lag];
-            }
-            corrs[lag] = corr;
-        }
-
-        // Lissage par moyenne mobile (fenêtre 3)
-        let mut corrs_smoothed = corrs.clone();
-        for lag in (start_lag + 1)..(end_lag - 1) {
-            corrs_smoothed[lag] = (corrs[lag - 1] + corrs[lag] + corrs[lag + 1]) / 3.0;
-        }
-
-        let mut best_lag = 0;
-        let mut max_corr = 0.0;
-        for lag in start_lag..=end_lag {
-            let corr = corrs_smoothed[lag];
-            if corr > max_corr {
-                max_corr = corr;
-                best_lag = lag;
-            }
-        }
-
-        if best_lag == 0 {
-            return Err("No correlation found");
-        }
-
-        let confidence = if energy > 0.0 { max_corr / energy } else { 0.0 };
-
-        if confidence < min_confidence {
-            return Err("Confidence too low");
-        }
-
-        Ok((best_lag, confidence, max_corr))
-    }
-
-    fn check_harmonics(
-        &self,
-        initial_lag: usize,
-        initial_corr: f32,
-        centered_signal: &[f32],
-        min_lag: usize,
-    ) -> usize {
-        let mut best_lag = initial_lag;
-
-        // Helper closure for local search
-        let find_best_in_range = |center_lag: usize| -> (usize, f32) {
-            let start = center_lag.saturating_sub(1);
-            let end = center_lag + 1;
-            let mut max_c = 0.0;
-            let mut best_l = 0;
-
-            for lag in start..=end {
-                if lag >= centered_signal.len() {
-                    continue;
-                }
-                let mut corr = 0.0;
-                for i in 0..(centered_signal.len() - lag) {
-                    corr += centered_signal[i] * centered_signal[i + lag];
-                }
-                if corr > max_c {
-                    max_c = corr;
-                    best_l = lag;
-                }
-            }
-            (best_l, max_c)
-        };
-
-        // 1. Check 2x BPM (Half Lag)
-        let half_lag = initial_lag / 2;
-        println!(
-            "[DEBUG] check_harmonics: initial_lag={}, initial_corr={:.4}, half_lag={}, min_lag={}",
-            initial_lag, initial_corr, half_lag, min_lag
-        );
-        if half_lag >= min_lag {
-            // Recherche locale autour de half_lag (±5)
-            let mut max_half_corr = 0.0;
-            let mut best_half_lag = half_lag;
-            for lag in half_lag.saturating_sub(5)..=half_lag + 5 {
-                if lag < min_lag || lag >= centered_signal.len() {
-                    continue;
-                }
-                let mut corr = 0.0;
-                for i in 0..(centered_signal.len() - lag) {
-                    corr += centered_signal[i] * centered_signal[i + lag];
-                }
-                if corr > max_half_corr {
-                    max_half_corr = corr;
-                    best_half_lag = lag;
-                }
-            }
-            println!(
-                "[DEBUG] check_harmonics: initial_lag={}, initial_corr={:.4}, half_lag={}, best_half_lag={}, max_half_corr={:.4}, seuil={:.4}",
-                initial_lag,
-                initial_corr,
-                half_lag,
-                best_half_lag,
-                max_half_corr,
-                initial_corr * 0.3
-            );
-            if max_half_corr > (initial_corr * 0.3) {
-                println!(
-                    "[DEBUG] check_harmonics: Correction d'octave appliquée, on passe de lag {} à {}",
-                    best_lag, best_half_lag
-                );
-                best_lag = best_half_lag;
-            } else {
-                println!(
-                    "[DEBUG] check_harmonics: Pas de correction d'octave (max_half_corr trop faible)"
-                );
-            }
-        }
-        best_lag
-    }
-
-    fn parabolic_interpolation(
-        &self,
-        best_lag: usize,
-        max_corr: f32,
-        centered_signal: &[f32],
-        start_lag: usize,
-        end_lag: usize,
-    ) -> f32 {
-        let mut refined_lag = best_lag as f32;
-
-        if best_lag > start_lag && best_lag < end_lag {
-            let calc_corr = |l: usize| -> f32 {
-                let mut c = 0.0;
-                for i in 0..(centered_signal.len() - l) {
-                    c += centered_signal[i] * centered_signal[i + l];
-                }
-                c
-            };
-
-            let y_prev = calc_corr(best_lag - 1);
-            let y_curr = max_corr;
-            let y_next = calc_corr(best_lag + 1);
-
-            let denominator = 2.0 * (y_prev - 2.0 * y_curr + y_next);
-            if denominator.abs() > 0.0001 {
-                let offset = (y_prev - y_next) / denominator;
-                refined_lag = best_lag as f32 + offset;
-            }
-        }
-        refined_lag
-    }
-
-    fn check_energy_threshold(&self, current_energy: f32) -> Option<f32> {
-        // Calculate current average energy of history
-        let avg_history_energy = if self.history.is_empty() {
-            0.0
-        } else {
-            self.history.iter().map(|e| e.energy).sum::<f32>() / self.history.len() as f32
-        };
-
-        // Adaptive Energy Threshold (Gate)
-        if !self.history.is_empty()
-            && current_energy < (avg_history_energy * 0.9)
-            && current_energy < 0.03
-            && current_energy > 0.06
-        {
-            return None;
-        }
-
-        Some(avg_history_energy)
-    }
-
-    fn check_drop(&self, samples: &[f32], threshold: Option<f32>) -> bool {
-        let split_index = (samples.len()) / 2; // 50% of the buffer
-
-        let threshold = threshold.unwrap_or(1.3);
-
-        // 1. History Energy (0..75%)
-        let mut history_sum_sq = 0.0;
-        for i in 0..split_index {
-            let val = samples[i];
-            history_sum_sq += val * val;
-        }
-        let history_count = split_index.max(1);
-        let history_energy = history_sum_sq / history_count as f32;
-
-        // 2. Recent Energy (75%..100%)
-        let mut recent_sum_sq = 0.0;
-        for i in split_index..samples.len() {
-            let val = samples[i];
-            recent_sum_sq += val * val;
-        }
-        let recent_count = (samples.len() - split_index).max(1);
-        let current_energy = recent_sum_sq / recent_count as f32;
-
-        // 3. Detection
-        (current_energy > history_energy * threshold) && (current_energy > 0.04)
-    }
-
-    pub fn process(
-        &mut self,
-        new_samples: &[f32],
-    ) -> Result<Option<AnalysisResult>, Box<dyn std::error::Error>> {
-        // 1. Filtering and Downsampling (Input -> Fine)
-        self.fine_config
-            .update_buffer(new_samples, &mut self.scratch_processing, |chunk| {
-                let mut sum = 0.0;
-                for &x in chunk {
-                    // Apply filter
-                    let y = self.input_filter.process(x);
-                    sum += y.abs(); // Rectification
-                }
-                sum / chunk.len() as f32
-            });
-
-        // 2. Downsampling (Fine -> Coarse)
-        // Use scratch_coarse_vec as temporary buffer for this step output
-        // because it will be overwritten during coarse normalization right after.
-        self.coarse_config.update_buffer(
-            &self.scratch_processing,
-            &mut self.scratch_coarse_vec,
-            |chunk| {
-                let sum: f32 = chunk.iter().sum();
-                sum / chunk.len() as f32
-            },
-        );
-
-        // 3. Update Raw Config (Input -> Raw)
-        // Reuse scratch_processing as temporary buffer
-        self.raw_config
-            .update_buffer(new_samples, &mut self.scratch_processing, |chunk| {
-                let mut sum_sq = 0.0;
-                for &x in chunk {
-                    sum_sq += x * x;
-                }
-                sum_sq / chunk.len() as f32
-            });
-
-        // Wait for buffer to be full
-        if self.coarse_config.buffer.len() < self.coarse_config.buffer.capacity() {
-            return Ok(None);
-        }
-
-        // ============================================================
-        // NOISE GATE (Pre-Analysis)
-        // ============================================================
-        // Check if there is enough signal volume to justify analysis.
-        // We use the raw buffer (amplitude envelope) to check the input level.
-        let raw_level =
-            self.raw_config.buffer.iter().sum::<f32>() / self.raw_config.buffer.len().max(1) as f32;
-
-        // Threshold: 0.005 (approx -46dB). Below this, we consider it silence/noise.
-        if raw_level < 0.005 {
-            return Ok(None);
-        }
-
-        // ============================================================
-        // STEP 1 : COARSE SEARCH
-        // ============================================================
-
-        let norm_res_coarse = Self::normalize_window(
-            &self.coarse_config.buffer,
-            &mut self.scratch_coarse_vec,
-            &mut self.scratch_coarse_centered,
-        );
-
-        if norm_res_coarse.energy_mean <= 0.001 {
-            return Ok(None);
-        }
-
-        let (best_lag_c, coarse_conf, max_corr_c) = match self.search_correlation(
-            &self.scratch_coarse_centered,
-            norm_res_coarse.energy_sum,
-            self.coarse_config.min_lag,
-            self.coarse_config.max_lag,
-            self.config.thresholds.coarse_confidence,
-        ) {
-            Ok(res) => res,
-            Err(_) => return Ok(None),
-        };
-
-        // Correction d'octave sur le lag coarse (avant passage au fin, value);
-        println!("coarse best lag: {}", best_lag_c);
-        let best_lag_c_harm = self.check_harmonics(
-            best_lag_c,
-            max_corr_c,
-            &self.scratch_coarse_centered,
-            self.coarse_config.min_lag,
-        );
-        if best_lag_c != best_lag_c_harm {
-            println!(
-                "[DEBUG] process: Correction d'octave appliquée sur coarse, lag {} -> {}",
-                best_lag_c, best_lag_c_harm
-            );
-        }
-        let best_lag_c = best_lag_c_harm;
-        // ============================================================
-        // STEP 2 : REFINEMENT (FINE)
-        // ============================================================
-
-        // Convert Coarse Lag to Fine
-        // Ratio = fine_rate / coarse_rate = coarse_step
-        let center_lag_f = best_lag_c * self.coarse_config.step;
-
-        // Fine search window
-        let search_radius = 50;
-        let min_lag_f = center_lag_f.saturating_sub(search_radius);
-        let max_lag_f = center_lag_f + search_radius;
-
-        let norm_res_fine = Self::normalize_window(
-            &self.fine_config.buffer,
-            &mut self.scratch_fine_vec,
-            &mut self.scratch_fine_centered,
-        );
-
-        // Ensure we stay within buffer bounds
-        let safe_max_lag = self.scratch_fine_centered.len().saturating_sub(1);
-        let start_lag = min_lag_f.max(1);
-        let end_lag = max_lag_f.min(safe_max_lag);
-
-        let (best_lag_f, confidence, max_corr_f) = match self.search_correlation(
-            &self.scratch_fine_centered,
-            norm_res_fine.energy_sum,
-            min_lag_f,
-            max_lag_f,
-            self.config.thresholds.fine_confidence,
-        ) {
-            Ok(res) => res,
-            Err(_) => return Ok(None),
-        };
-
-        // ============================================================
-        // STEP 3 : PARABOLIC INTERPOLATION
-        // ============================================================
-
-        let refined_lag = self.parabolic_interpolation(
-            best_lag_f,
-            max_corr_f,
-            &self.scratch_fine_centered,
-            start_lag,
-            end_lag,
-        );
-
-        // Final BPM calculation rounded to nearest 0.1
-        let bpm = (self.fine_config.rate * 60.0 / refined_lag * 10.0).round() / 10.0;
-
-        // ============================================================
-        // DROP DETECTION (IMPROVED - Intra-Window Comparison)
-        // ============================================================
-        // Calculate Drop BEFORE validating BPM for history
-        // Increase threshold (1.5 instead of 1.3) and require minimal confidence
-
-        let is_drop = confidence > 0.6 && self.check_drop(&self.scratch_fine_vec, Some(1.5));
-
-        // ============================================================
-        // HISTORY MANAGEMENT AND SMOOTHING
-        // ============================================================
-
-        let now = Instant::now();
-        // 1. Reset if prolonged silence (> 10s)
-        if let Some(last_entry) = self.history.back() {
-            if now.duration_since(last_entry.timestamp).as_secs_f32() > 10.0 {
-                self.history.clear();
-            }
-        }
-
-        // 2. Check adaptive energy threshold
-        let avg_history_energy = match self.check_energy_threshold(norm_res_fine.energy_mean) {
-            Some(e) => e,
-            None => return Ok(None),
-        };
-
-        // 5. Update history
-        if self.history.len() >= 3 {
-            self.history.pop_front();
-        }
-        self.history.push_back(BpmHistoryEntry {
-            bpm: bpm,
-            energy: norm_res_fine.energy_mean,
-            timestamp: now,
-        });
-
-        // 6. Calculate smoothed values
-        // Median BPM
-        self.scratch_bpm_sort.clear();
-        self.scratch_bpm_sort
-            .extend(self.history.iter().map(|e| e.bpm));
-        self.scratch_bpm_sort
-            .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-        let smoothed_bpm = if !self.scratch_bpm_sort.is_empty() {
-            self.scratch_bpm_sort[self.scratch_bpm_sort.len() / 2]
-        } else {
-            bpm
-        };
-
-        // Calculate precise beat offset (Latency)
-        // If it's a Drop, search for peak in recent section (last 25%)
-        // to avoid locking onto an old peak.
-        let search_start = if is_drop {
-            (self.scratch_fine_vec.len() * 3) / 4
-        } else {
-            0
-        };
-
-        let mut max_energy = 0.0;
-        let mut max_energy_index = search_start;
-        for (i, &val) in self.scratch_fine_vec.iter().enumerate().skip(search_start) {
-            if val > max_energy {
-                max_energy = val;
-                max_energy_index = i;
-            }
-        }
-
-        let samples_since_peak = self
-            .scratch_fine_vec
-            .len()
-            .saturating_sub(1)
-            .saturating_sub(max_energy_index);
-        let latency_seconds = samples_since_peak as f32 / self.fine_config.rate;
-        let beat_offset = Some(Duration::from_secs_f32(latency_seconds));
-
-        // Calculate Raw Energy (Unnormalized)
-        let raw_energy =
-            self.raw_config.buffer.iter().sum::<f32>() / self.raw_config.buffer.len().max(1) as f32;
-
-        Ok(Some(AnalysisResult {
-            bpm: smoothed_bpm,
-            coarse_confidence: coarse_conf,
-            is_drop,
-            confidence,
-            energy: norm_res_fine.energy_mean,
-            average_energy: avg_history_energy,
-            raw_energy,
-            beat_offset,
-            max_rise: max_energy,
-        }))
-    }
+#[derive(Clone, Copy, Debug)]
+pub enum FilterOrder {
+    Order2,
+    Order4,
 }

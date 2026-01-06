@@ -11,10 +11,16 @@ repository = "https://github.com/kiki442002/rust-bpm-analyzer"
 [dependencies]
 # Audio
 cpal = "0.16.0"
+rubato = "0.13.0"
 # Sync
 rusty_link = "0.4.6"
 # DSP
 biquad = "0.5.0"
+bincode = "2.0.0"
+postcard = { version = "1.1", features = ["use-std"] }
+serde = { version = "1.0.228", features = ["derive"] }
+
+
 
 # Linux specific dependencies (Milk-V Duo, Raspberry Pi, Desktop Linux)
 [target.'cfg(target_os = "linux")'.dependencies]
