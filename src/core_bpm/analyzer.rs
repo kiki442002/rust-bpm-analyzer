@@ -1,7 +1,9 @@
+use aubio::Tempo;
 use biquad::*;
 use iced::widget::shader::wgpu::core::command::render_ffi::wgpu_render_pass_set_stencil_reference;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
+use std::u32;
 
 #[derive(Debug, Clone, Copy)]
 struct BpmHistoryEntry {
@@ -16,11 +18,7 @@ pub struct AnalysisResult {
     pub is_drop: bool,
     pub confidence: f32,
     pub coarse_confidence: f32,
-    pub energy: f32,
-    pub average_energy: f32,
-    pub raw_energy: f32,
     pub beat_offset: Option<Duration>,
-    pub max_rise: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -221,6 +219,10 @@ pub struct BpmAnalyzer {
     scratch_coarse_centered: Vec<f32>,
     scratch_processing: Vec<f32>,
     scratch_bpm_sort: Vec<f32>,
+
+    // Ajout : tempo aubio
+    aubio_tempo: Tempo,
+    aubio_hop_s: usize,
 }
 
 impl BpmAnalyzer {
@@ -274,6 +276,21 @@ impl BpmAnalyzer {
             FilterOrder::Order4,
         )?;
 
+        // Taille de fenêtre raisonnable pour aubio (2048, hop 1024)
+        // Calcule hop_s pour ~20ms, arrondi à la puissance de 2 la plus proche
+        fn closest_pow2(x: usize) -> usize {
+            let lower = 2usize.pow((x as f32).log2().floor() as u32);
+            let upper = 2usize.pow((x as f32).log2().ceil() as u32);
+            if x - lower < upper - x { lower } else { upper }
+        }
+        let hop_target = (sample_rate as f32 * 0.025) as usize;
+        let hop_s = closest_pow2(hop_target.max(32));
+        let win_s = hop_s * 4;
+        let mut aubio_tempo = Tempo::new(aubio::OnsetMode::SpecDiff, win_s, hop_s, sample_rate)
+            .map_err(|e| format!("Erreur init aubio tempo: {}", e))?;
+
+        aubio_tempo.set_threshold(0.1);
+
         println!("BPM Analyzer Configured:");
         println!("  Sample Rate: {} Hz", sample_rate);
         println!("  Fine Rate: {:.2} Hz (Step {})", fine_rate, fine_step);
@@ -295,6 +312,8 @@ impl BpmAnalyzer {
             scratch_coarse_centered: Vec::with_capacity(1024),
             scratch_processing: Vec::with_capacity(1024),
             scratch_bpm_sort: Vec::with_capacity(3),
+            aubio_tempo,
+            aubio_hop_s: hop_s,
         })
     }
 
@@ -395,35 +414,8 @@ impl BpmAnalyzer {
     ) -> usize {
         let mut best_lag = initial_lag;
 
-        // Helper closure for local search
-        let find_best_in_range = |center_lag: usize| -> (usize, f32) {
-            let start = center_lag.saturating_sub(1);
-            let end = center_lag + 1;
-            let mut max_c = 0.0;
-            let mut best_l = 0;
-
-            for lag in start..=end {
-                if lag >= centered_signal.len() {
-                    continue;
-                }
-                let mut corr = 0.0;
-                for i in 0..(centered_signal.len() - lag) {
-                    corr += centered_signal[i] * centered_signal[i + lag];
-                }
-                if corr > max_c {
-                    max_c = corr;
-                    best_l = lag;
-                }
-            }
-            (best_l, max_c)
-        };
-
         // 1. Check 2x BPM (Half Lag)
         let half_lag = initial_lag / 2;
-        println!(
-            "[DEBUG] check_harmonics: initial_lag={}, initial_corr={:.4}, half_lag={}, min_lag={}",
-            initial_lag, initial_corr, half_lag, min_lag
-        );
         if half_lag >= min_lag {
             // Recherche locale autour de half_lag (±5)
             let mut max_half_corr = 0.0;
@@ -441,25 +433,9 @@ impl BpmAnalyzer {
                     best_half_lag = lag;
                 }
             }
-            println!(
-                "[DEBUG] check_harmonics: initial_lag={}, initial_corr={:.4}, half_lag={}, best_half_lag={}, max_half_corr={:.4}, seuil={:.4}",
-                initial_lag,
-                initial_corr,
-                half_lag,
-                best_half_lag,
-                max_half_corr,
-                initial_corr * 0.3
-            );
-            if max_half_corr > (initial_corr * 0.3) {
-                println!(
-                    "[DEBUG] check_harmonics: Correction d'octave appliquée, on passe de lag {} à {}",
-                    best_lag, best_half_lag
-                );
+
+            if max_half_corr > (initial_corr * 0.5) {
                 best_lag = best_half_lag;
-            } else {
-                println!(
-                    "[DEBUG] check_harmonics: Pas de correction d'octave (max_half_corr trop faible)"
-                );
             }
         }
         best_lag
@@ -627,19 +603,12 @@ impl BpmAnalyzer {
         };
 
         // Correction d'octave sur le lag coarse (avant passage au fin, value);
-        println!("coarse best lag: {}", best_lag_c);
         let best_lag_c_harm = self.check_harmonics(
             best_lag_c,
             max_corr_c,
             &self.scratch_coarse_centered,
             self.coarse_config.min_lag,
         );
-        if best_lag_c != best_lag_c_harm {
-            println!(
-                "[DEBUG] process: Correction d'octave appliquée sur coarse, lag {} -> {}",
-                best_lag_c, best_lag_c_harm
-            );
-        }
         let best_lag_c = best_lag_c_harm;
         // ============================================================
         // STEP 2 : REFINEMENT (FINE)
@@ -697,7 +666,7 @@ impl BpmAnalyzer {
         // Calculate Drop BEFORE validating BPM for history
         // Increase threshold (1.5 instead of 1.3) and require minimal confidence
 
-        let is_drop = confidence > 0.6 && self.check_drop(&self.scratch_fine_vec, Some(1.5));
+        let is_drop = confidence > 0.6 && self.check_drop(&self.scratch_fine_vec, Some(1.4));
 
         // ============================================================
         // HISTORY MANAGEMENT AND SMOOTHING
@@ -711,11 +680,41 @@ impl BpmAnalyzer {
             }
         }
 
-        // 2. Check adaptive energy threshold
-        let avg_history_energy = match self.check_energy_threshold(norm_res_fine.energy_mean) {
-            Some(e) => e,
-            None => return Ok(None),
-        };
+        // Met à jour aubio avec les nouvelles données entrantes
+        // On découpe new_samples en tranches de hop_s pour alimenter aubio correctement
+        let mut idx = 0;
+        let (mut aubio_bpm, mut aubio_confidence) = (0.0, 0.0);
+        while idx + self.aubio_hop_s <= new_samples.len() {
+            let slice = &new_samples[idx..idx + self.aubio_hop_s];
+            if let Err(e) = self.aubio_tempo.do_result(slice) {
+                eprintln!("[aubio] Erreur do_result: {}", e);
+            }
+            if (self.aubio_tempo.get_confidence() > aubio_confidence) {
+                aubio_confidence = self.aubio_tempo.get_confidence();
+                aubio_bpm = self.aubio_tempo.get_bpm();
+            }
+            idx += self.aubio_hop_s;
+        }
+        println!(
+            "Aubio BPM Estimate: {}, Confidence: {}",
+            aubio_bpm, aubio_confidence
+        );
+
+        // --- Validation croisée autocorrélation / aubio ---
+        if aubio_bpm != 0.0 {
+            let mut bpm_valid = false;
+            for mult in 1..=5 {
+                let bpm_aubio_mult = aubio_bpm * mult as f32;
+                if (bpm >= bpm_aubio_mult - 15.0) && (bpm <= bpm_aubio_mult + 5.0) {
+                    bpm_valid = true;
+                    break;
+                }
+            }
+            if !bpm_valid {
+                // Les BPM ne correspondent pas, on ne valide pas la détection
+                return Ok(None);
+            }
+        }
 
         // 5. Update history
         if self.history.len() >= 3 {
@@ -741,46 +740,19 @@ impl BpmAnalyzer {
             bpm
         };
 
-        // Calculate precise beat offset (Latency)
-        // If it's a Drop, search for peak in recent section (last 25%)
-        // to avoid locking onto an old peak.
-        let search_start = if is_drop {
-            (self.scratch_fine_vec.len() * 3) / 4
+        // Utilise le dernier beat détecté par aubio pour la resynchronisation
+        let beat_offset = if is_drop {
+            Some(Duration::from_secs_f32(self.aubio_tempo.get_last_s()))
         } else {
-            0
+            None
         };
-
-        let mut max_energy = 0.0;
-        let mut max_energy_index = search_start;
-        for (i, &val) in self.scratch_fine_vec.iter().enumerate().skip(search_start) {
-            if val > max_energy {
-                max_energy = val;
-                max_energy_index = i;
-            }
-        }
-
-        let samples_since_peak = self
-            .scratch_fine_vec
-            .len()
-            .saturating_sub(1)
-            .saturating_sub(max_energy_index);
-        let latency_seconds = samples_since_peak as f32 / self.fine_config.rate;
-        let beat_offset = Some(Duration::from_secs_f32(latency_seconds));
-
-        // Calculate Raw Energy (Unnormalized)
-        let raw_energy =
-            self.raw_config.buffer.iter().sum::<f32>() / self.raw_config.buffer.len().max(1) as f32;
 
         Ok(Some(AnalysisResult {
             bpm: smoothed_bpm,
             coarse_confidence: coarse_conf,
             is_drop,
             confidence,
-            energy: norm_res_fine.energy_mean,
-            average_energy: avg_history_energy,
-            raw_energy,
             beat_offset,
-            max_rise: max_energy,
         }))
     }
 }

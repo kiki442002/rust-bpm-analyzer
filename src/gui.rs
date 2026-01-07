@@ -291,14 +291,11 @@ fn run_analysis_loop(
                                 result.beat_offset,
                             );
                             println!(
-                                "BPM: {:.1} | Drop: {} | Conf: {:.2} | CoarseConf: {:.2} | Energy: {:.4} | Avg: {:.4} | Raw: {:.4}",
+                                "BPM: {:.1} | Drop: {} | Conf: {:.2} | CoarseConf: {:.2}",
                                 result.bpm,
                                 result.is_drop,
                                 result.confidence,
-                                result.coarse_confidence,
-                                result.energy,
-                                result.average_energy,
-                                result.raw_energy,
+                                result.coarse_confidence
                             );
                         }
 

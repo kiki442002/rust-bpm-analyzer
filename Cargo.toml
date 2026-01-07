@@ -16,6 +16,8 @@ rusty_link = "0.4.6"
 # DSP
 biquad = "0.5.0"
 
+aubio = { version = "0.2", features = ["bindgen", "static", "builtin"] }
+
 # Linux specific dependencies (Milk-V Duo, Raspberry Pi, Desktop Linux)
 [target.'cfg(target_os = "linux")'.dependencies]
 gpio-cdev = "0.6.0"
