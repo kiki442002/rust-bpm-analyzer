@@ -1,5 +1,4 @@
 use biquad::*;
-use iced::widget::shader::wgpu::core::command::render_ffi::wgpu_render_pass_set_stencil_reference;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -20,7 +19,6 @@ pub struct AnalysisResult {
     pub average_energy: f32,
     pub raw_energy: f32,
     pub beat_offset: Option<Duration>,
-    pub max_rise: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -736,7 +734,6 @@ impl BpmAnalyzer {
             average_energy: avg_history_energy,
             raw_energy,
             beat_offset,
-            max_rise: max_energy,
         }))
     }
 }
