@@ -581,7 +581,6 @@ impl BpmAnalyzer {
         };
 
         // Correction d'octave sur le lag coarse (avant passage au fin, value);
-        println!("coarse best lag: {}", best_lag_c);
         let best_lag_c_harm = self.check_harmonics(
             best_lag_c,
             max_corr_c,
