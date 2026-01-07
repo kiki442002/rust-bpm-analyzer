@@ -395,35 +395,8 @@ impl BpmAnalyzer {
     ) -> usize {
         let mut best_lag = initial_lag;
 
-        // Helper closure for local search
-        let find_best_in_range = |center_lag: usize| -> (usize, f32) {
-            let start = center_lag.saturating_sub(1);
-            let end = center_lag + 1;
-            let mut max_c = 0.0;
-            let mut best_l = 0;
-
-            for lag in start..=end {
-                if lag >= centered_signal.len() {
-                    continue;
-                }
-                let mut corr = 0.0;
-                for i in 0..(centered_signal.len() - lag) {
-                    corr += centered_signal[i] * centered_signal[i + lag];
-                }
-                if corr > max_c {
-                    max_c = corr;
-                    best_l = lag;
-                }
-            }
-            (best_l, max_c)
-        };
-
         // 1. Check 2x BPM (Half Lag)
         let half_lag = initial_lag / 2;
-        println!(
-            "[DEBUG] check_harmonics: initial_lag={}, initial_corr={:.4}, half_lag={}, min_lag={}",
-            initial_lag, initial_corr, half_lag, min_lag
-        );
         if half_lag >= min_lag {
             // Recherche locale autour de half_lag (±5)
             let mut max_half_corr = 0.0;
@@ -441,25 +414,8 @@ impl BpmAnalyzer {
                     best_half_lag = lag;
                 }
             }
-            println!(
-                "[DEBUG] check_harmonics: initial_lag={}, initial_corr={:.4}, half_lag={}, best_half_lag={}, max_half_corr={:.4}, seuil={:.4}",
-                initial_lag,
-                initial_corr,
-                half_lag,
-                best_half_lag,
-                max_half_corr,
-                initial_corr * 0.3
-            );
-            if max_half_corr > (initial_corr * 0.3) {
-                println!(
-                    "[DEBUG] check_harmonics: Correction d'octave appliquée, on passe de lag {} à {}",
-                    best_lag, best_half_lag
-                );
+            if max_half_corr > (initial_corr * 0.5) {
                 best_lag = best_half_lag;
-            } else {
-                println!(
-                    "[DEBUG] check_harmonics: Pas de correction d'octave (max_half_corr trop faible)"
-                );
             }
         }
         best_lag
