@@ -667,7 +667,7 @@ impl BpmAnalyzer {
             if let Err(e) = self.aubio_tempo.do_result(slice) {
                 eprintln!("[aubio] Erreur do_result: {}", e);
             }
-            if (self.aubio_tempo.get_confidence() > aubio_confidence) {
+            if self.aubio_tempo.get_confidence() > aubio_confidence {
                 aubio_confidence = self.aubio_tempo.get_confidence();
                 aubio_bpm = self.aubio_tempo.get_bpm();
             }
