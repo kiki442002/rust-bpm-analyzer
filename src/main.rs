@@ -8,10 +8,8 @@ mod embeded;
 #[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]
 mod gui;
 
-mod embeded;
-
 // Configuration grouped by platform
-//#[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
+#[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
 mod platform {
     pub const TARGET_SAMPLE_RATE: u32 = 11025;
 
@@ -21,15 +19,15 @@ mod platform {
     }
 }
 
-// #[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]
-// mod platform {
-//     pub const TARGET_SAMPLE_RATE: u32 = 48000;
+#[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]
+mod platform {
+    pub const TARGET_SAMPLE_RATE: u32 = 48000;
 
-//     pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-//         println!("Starting GUI Mode...");
-//         super::gui::run()
-//     }
-// }
+    pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+        println!("Starting GUI Mode...");
+        super::gui::run()
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     platform::run()
