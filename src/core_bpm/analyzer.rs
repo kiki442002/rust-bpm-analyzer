@@ -1,6 +1,5 @@
 use aubio::Tempo;
 use biquad::*;
-use iced::widget::shader::wgpu::core::command::render_ffi::wgpu_render_pass_set_stencil_reference;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use std::u32;
@@ -8,7 +7,6 @@ use std::u32;
 #[derive(Debug, Clone, Copy)]
 struct BpmHistoryEntry {
     bpm: f32,
-    energy: f32,
     timestamp: Instant,
 }
 
@@ -473,26 +471,6 @@ impl BpmAnalyzer {
         refined_lag
     }
 
-    fn check_energy_threshold(&self, current_energy: f32) -> Option<f32> {
-        // Calculate current average energy of history
-        let avg_history_energy = if self.history.is_empty() {
-            0.0
-        } else {
-            self.history.iter().map(|e| e.energy).sum::<f32>() / self.history.len() as f32
-        };
-
-        // Adaptive Energy Threshold (Gate)
-        if !self.history.is_empty()
-            && current_energy < (avg_history_energy * 0.9)
-            && current_energy < 0.03
-            && current_energy > 0.06
-        {
-            return None;
-        }
-
-        Some(avg_history_energy)
-    }
-
     fn check_drop(&self, samples: &[f32], threshold: Option<f32>) -> bool {
         let split_index = (samples.len()) / 2; // 50% of the buffer
 
@@ -722,7 +700,6 @@ impl BpmAnalyzer {
         }
         self.history.push_back(BpmHistoryEntry {
             bpm: bpm,
-            energy: norm_res_fine.energy_mean,
             timestamp: now,
         });
 
