@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 mod core_bpm;
 mod network_sync;
 
