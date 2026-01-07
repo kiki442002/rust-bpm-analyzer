@@ -673,10 +673,6 @@ impl BpmAnalyzer {
             }
             idx += self.aubio_hop_s;
         }
-        println!(
-            "Aubio BPM Estimate: {}, Confidence: {}",
-            aubio_bpm, aubio_confidence
-        );
 
         // --- Validation croisée autocorrélation / aubio ---
         if aubio_bpm != 0.0 {
