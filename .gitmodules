@@ -1,0 +1,3 @@
+[submodule "host-tools"]
+	path = host-tools
+	url = https://github.com/milkv-duo/host-tools.git
