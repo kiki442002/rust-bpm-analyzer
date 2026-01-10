@@ -33,6 +33,7 @@ PATH = "host-tools/gcc/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu/bin:${P
 # Ces variables seront injectées à chaque fois que tu lances cargo
 PKG_CONFIG_ALLOW_CROSS = "1"
 PKG_CONFIG_PATH = "/usr/lib/aarch64-linux-gnu/pkgconfig/"
+BINDGEN_EXTRA_CLANG_ARGS="--sysroot=host-tools/gcc/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu/aarch64-linux-gnu/libc"
 
 
 # Aliases to simplify build commands
