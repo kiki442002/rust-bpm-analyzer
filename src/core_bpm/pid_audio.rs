@@ -53,6 +53,13 @@ impl AudioPID {
         }
         let (selem_id, output_min, output_max) =
             found.ok_or_else(|| "No capture Selem found in mixer".to_string())?;
+
+        println!(
+            "AudioPID initialized with Selem: {} | Capture Volume Range: {} - {}",
+            selem_id.get_name(),
+            output_min,
+            output_max
+        );
         Ok(AudioPID {
             kp,
             ki,
