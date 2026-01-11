@@ -1,6 +1,5 @@
 use alsa::Mixer;
 use alsa::mixer::{SelemChannelId, SelemId};
-use libc;
 use std::time::Instant;
 
 pub struct AudioPID {
@@ -46,7 +45,7 @@ impl AudioPID {
         Ok(gain)
     }
     /// Met à jour le PID à partir d'un slice de valeurs (ex: buffer audio), dt calculé automatiquement
-    pub fn update_from_slice(&mut self, setpoint: f32, buffer: &[f32]) -> Result<f32> {
+    pub fn update_from_slice(&mut self, setpoint: f32, buffer: &[f32]) -> Result<f32, String> {
         if buffer.is_empty() {
             return Ok(0.0 as f32);
         }
@@ -74,7 +73,7 @@ impl AudioPID {
     }
 
     /// Met à jour le PID avec dt calculé automatiquement
-    pub fn update(&mut self, setpoint: f32, measured: f32) -> alsa::Result<f32> {
+    pub fn update(&mut self, setpoint: f32, measured: f32) -> Result<f32, String> {
         let now = Instant::now();
         let dt = if let Some(last) = self.last_update {
             let secs = (now - last).as_secs_f32();
