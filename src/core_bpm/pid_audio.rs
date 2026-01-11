@@ -11,7 +11,7 @@ pub struct AudioPID {
     output_min: i64,
     output_max: i64,
     last_update: Option<Instant>,
-    selem: Selem,
+    selem_id: SelemId,
 }
 
 impl AudioPID {
@@ -25,7 +25,11 @@ impl AudioPID {
         let mean = sum / buffer.len() as f32;
         let gain = self.update(setpoint, mean)?;
 
-        self.selem
+        let selem = mixer
+            .find_selem(&self.selem_id)
+            .ok_or_else(|| "Impossible de retrouver le contrôle audio".to_string())?;
+
+        selem
             .set_playback_volume(SelemChannelId::FrontLeft, gain)
             .map_err(|e| format!("set_playback_volume Error: {}", e))?;
         Ok(gain)
@@ -40,21 +44,21 @@ impl AudioPID {
         self.update(setpoint, mean)
     }
     pub fn new(kp: f32, ki: f32, kd: f32, mixer_name: &str) -> Result<Self, String> {
-        let mixer =
-            Mixer::new(mixer_name, false).map_err(|e| format!("Mixer::new Error: {}", e))?;
-        // Recherche du premier selem playback dispo
         let mut found = None;
         for elem in mixer.iter() {
-            if let Some(selem) = elem.get_selem() {
-                if selem.has_capture_volume() {
-                    let (output_min, output_max) = selem.get_capture_volume_range();
-                    found = Some((selem, output_min, output_max));
-                    break;
-                }
+            // On n'appelle pas get_selem(). On vérifie directement si l'élément
+            // possède les capacités d'un Selem de capture via le Trait.
+            if elem.has_capture_volume() {
+                let (output_min, output_max) = elem.get_capture_volume_range();
+
+                // ATTENTION : 'elem' ne peut pas être stocké facilement car il est lié à la durée de vie du mixer.
+                // On récupère souvent son identifiant (SelemId) ou on l'utilise directement ici.
+                found = Some((elem.get_id(), output_min, output_max));
+                break;
             }
         }
-        let (selem, output_min, output_max) =
-            found.ok_or_else(|| "Aucun selem playback trouvé sur 'default'".to_string())?;
+        let (selem_id, output_min, output_max) =
+            found.ok_or_else(|| format!("No capture Selem found in mixer '{}'", mixer_name))?;
         Ok(AudioPID {
             kp,
             ki,
@@ -64,7 +68,7 @@ impl AudioPID {
             output_min,
             output_max,
             last_update: None,
-            selem,
+            selem_id,
         })
     }
 

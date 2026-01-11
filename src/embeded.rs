@@ -7,10 +7,11 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-    // Paramètres PID à ajuster selon le système
-    let mut pid = AudioPID::new(0.5, 0.1, 0.0, 0.0, 100.0);
-    let setpoint = 0.5; // Niveau cible RMS (à ajuster)
     println!("Starting BPM Analyzer (Headless)...");
+
+    // Paramètres PID à ajuster selon le système
+    let mut pid = AudioPID::new(0.5, 0.1, 0.0, "ADC")?;
+    let setpoint = 0.5; // Niveau cible RMS (à ajuster)
 
     let (sender, receiver) = mpsc::channel();
     let mut current_hop_size = TARGET_SAMPLE_RATE as usize / 2; // 0.5s par défaut, comme dans gui
@@ -18,7 +19,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut analyzer = BpmAnalyzer::new(TARGET_SAMPLE_RATE, None)?;
     let mut link_manager = LinkManager::new();
     link_manager.link_state(true); // Active Link
-    let mut pid = AudioPID::new(0.5, 0.1, 0.0, "ADC")?;
 
     let _audio_capture = AudioCapture::new(
         sender,
