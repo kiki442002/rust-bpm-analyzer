@@ -35,7 +35,7 @@ impl AudioPID {
         let sid = SelemId::new(selem_name, 0);
         let selem = mixer
             .find_selem(&sid)
-            .ok_or_else(|| alsa::Error::new(alsa::errno::Errno::ENOENT))?;
+            .ok_or_else(|| alsa::Error::new("selem not found", alsa::errno::Errno::ENOENT))?;
         let (min, max) = selem.get_playback_volume_range();
         // Map le gain PID (output_min/output_max) sur la plage ALSA
         let alsa_gain = min as f32
