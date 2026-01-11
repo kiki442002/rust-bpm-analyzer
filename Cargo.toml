@@ -15,12 +15,14 @@ cpal = "0.16.0"
 rusty_link = "0.4.6"
 # DSP
 biquad = "0.5.0"
-
 aubio = { version = "0.2", features = ["bindgen", "static", "builtin"] }
 
-# Linux specific dependencies (Milk-V Duo, Raspberry Pi, Desktop Linux)
-[target.'cfg(target_os = "linux")'.dependencies]
+# Embedded Linux specific dependencies (Milk-V Duo, Raspberry Pi)
+#[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]
 gpio-cdev = "0.6.0"
+
+#[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]
+alsa = "0.11.0"
 
 # GUI only for Desktop (Mac, Windows, Linux x86)
 # Exclude Linux ARM/ARM64 (Raspberry Pi, Milk-V)

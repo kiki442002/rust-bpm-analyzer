@@ -1,10 +1,15 @@
+use crate::core_bpm::pid_audio::AudioPID;
 use crate::core_bpm::{AudioCapture, BpmAnalyzer, audio::AudioMessage};
 use crate::network_sync::LinkManager;
 use crate::platform::TARGET_SAMPLE_RATE;
+use alsa::mixer::SelemChannelId;
 use std::sync::mpsc;
 use std::time::Duration;
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // Paramètres PID à ajuster selon le système
+    let mut pid = AudioPID::new(0.5, 0.1, 0.0, 0.0, 100.0);
+    let setpoint = 0.5; // Niveau cible RMS (à ajuster)
     println!("Starting BPM Analyzer (Headless)...");
 
     let (sender, receiver) = mpsc::channel();
@@ -19,7 +24,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         None,
         TARGET_SAMPLE_RATE,
         None,
-        Some(Duration::from_millis(500)),
+        Some(Duration::from_millis(100)), // 100ms de données par paquet
     )?;
 
     println!("Audio capture started. Listening... (Press Ctrl+C to stop)");
@@ -27,7 +32,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         match receiver.recv() {
             Ok(AudioMessage::Samples(packet)) => {
-                new_samples_accumulator.extend(packet);
+                new_samples_accumulator.extend(&packet);
+                // PID audio sur chaque paquet de 100ms
+                let _ = pid.update_alsa_from_slice(
+                    setpoint,
+                    &packet,
+                    "default",
+                    "Master",
+                    SelemChannelId::FrontLeft,
+                );
                 if new_samples_accumulator.len() >= current_hop_size {
                     if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
                         println!(
