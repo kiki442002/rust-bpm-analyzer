@@ -26,6 +26,7 @@ impl AudioPID {
         }
         let sum: f32 = buffer.iter().sum();
         let mean = sum / buffer.len() as f32;
+        print!("Mean RMS: {:.4} | ", mean);
         let gain = self.update(setpoint, mean)?;
 
         let selem = mixer
