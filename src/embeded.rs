@@ -11,7 +11,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Paramètres PID à ajuster selon le système
     let mixer = Mixer::new("hw:0", false).map_err(|e: alsa::Error| e.to_string())?;
-    let mut pid = AudioPID::new(5.0, 1.5, 0.0, &mixer)?;
+    let mut pid = AudioPID::new(3.0, 1.0, 0.0, &mixer)?;
     let setpoint = 0.5; // Niveau cible RMS (à ajuster)
 
     let (sender, receiver) = mpsc::channel();
@@ -38,7 +38,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 // PID audio sur chaque paquet de 100ms
                 println!(
                     "PID output: {}",
-                    pid.update_alsa_from_slice(setpoint, &packet, &mixer, 0.98)?
+                    pid.update_alsa_from_slice(setpoint, &packet, &mixer)?
                 );
 
                 if new_samples_accumulator.len() >= current_hop_size {

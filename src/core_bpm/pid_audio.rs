@@ -14,25 +14,19 @@ pub struct AudioPID {
 
 impl AudioPID {
     /// Met à jour le PID à partir d'un buffer et applique le gain à ALSA
-    /// Utilise le taux de clipping comme mesure pour le PID
-    /// `clip_threshold` : seuil à partir duquel un échantillon est considéré comme "clippé"
+    /// `mixer_name` = "default" ou autre, `selem_name` = "Master" ou autre
     pub fn update_alsa_from_slice(
         &mut self,
         setpoint: f32,
         buffer: &[f32],
         mixer: &alsa::Mixer,
-        clip_threshold: f32,
     ) -> Result<i64, String> {
         if buffer.is_empty() {
             return Ok(0);
         }
-        let clipped = buffer
-            .iter()
-            .filter(|&&x| x.abs() >= clip_threshold)
-            .count();
-        let ratio = clipped as f32 / buffer.len() as f32;
-        print!("Clip ratio: {:.4} | ", ratio);
-        let gain = self.update(setpoint, ratio)?;
+        let rms = (buffer.iter().map(|x| x * x).sum::<f32>() / buffer.len() as f32).sqrt();
+        print!("Mean RMS: {:.4} | ", rms);
+        let gain = self.update(setpoint, rms)?;
 
         let selem = mixer
             .find_selem(&self.selem_id)
@@ -42,24 +36,6 @@ impl AudioPID {
             .set_capture_volume(SelemChannelId::FrontLeft, gain)
             .map_err(|e| format!("set_capture_volume Error: {}", e))?;
         Ok(gain)
-    }
-
-    /// Met à jour le PID à partir d'un buffer, retourne le gain calculé (utilise le taux de clipping)
-    pub fn update_from_slice(
-        &mut self,
-        setpoint: f32,
-        buffer: &[f32],
-        clip_threshold: f32,
-    ) -> Result<i64, String> {
-        if buffer.is_empty() {
-            return Ok(0);
-        }
-        let clipped = buffer
-            .iter()
-            .filter(|&&x| x.abs() >= clip_threshold)
-            .count();
-        let ratio = clipped as f32 / buffer.len() as f32;
-        self.update(setpoint, ratio)
     }
 
     pub fn new(kp: f32, ki: f32, kd: f32, mixer: &alsa::Mixer) -> Result<Self, String> {
