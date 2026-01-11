@@ -49,12 +49,14 @@ impl AudioPID {
     pub fn new(kp: f32, ki: f32, kd: f32, mixer: &alsa::Mixer) -> Result<Self, String> {
         let mut found = None;
         for elem in mixer.iter() {
-            let selem = alsa::mixer::Selem::from_elem(&elem); // On force la vue Selem
-            if selem.has_capture_volume() {
-                let (min, max) = selem.get_capture_volume_range();
-                let id = selem.get_id();
-                found = Some((id, min, max));
-                break;
+            // On tente de créer un Selem à partir de l'élément
+            if let Some(selem) = Selem::new(elem) {
+                if selem.has_capture_volume() {
+                    let (min, max) = selem.get_capture_volume_range();
+                    let id = selem.get_id();
+                    found = Some((id, min, max));
+                    break; // On a trouvé notre bonheur
+                }
             }
         }
         let (selem_id, output_min, output_max) =
