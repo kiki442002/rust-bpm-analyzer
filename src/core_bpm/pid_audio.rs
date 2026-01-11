@@ -33,8 +33,8 @@ impl AudioPID {
             .ok_or_else(|| "Impossible de retrouver le contrôle audio".to_string())?;
 
         selem
-            .set_playback_volume(SelemChannelId::FrontLeft, gain)
-            .map_err(|e| format!("set_playback_volume Error: {}", e))?;
+            .set_capture_volume(SelemChannelId::FrontLeft, gain)
+            .map_err(|e| format!("set_capture_volume Error: {}", e))?;
         Ok(gain)
     }
     /// Met à jour le PID à partir d'un slice de valeurs (ex: buffer audio), dt calculé automatiquement
