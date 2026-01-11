@@ -24,19 +24,20 @@ impl AudioPID {
         mixer_name: &str,
         selem_name: &str,
         channel: SelemChannelId,
-    ) -> alsa::Result<f32> {
+    ) -> Result<f32> {
         if buffer.is_empty() {
             return Ok(0.0);
         }
         let sum: f32 = buffer.iter().sum();
         let mean = sum / buffer.len() as f32;
-        let gain = self.update(setpoint, mean);
+        let gain = self.update(setpoint, mean)?;
 
         let mixer = Mixer::new(mixer_name, false)?;
         let sid = SelemId::new(selem_name, 0);
-        let selem = mixer
-            .find_selem(&sid)
-            .ok_or_else(|| alsa::Error::new("find_selem", libc::ENOENT))?;
+        let selem = match mixer.find_selem(&sid) {
+            Some(s) => s,
+            None => return Err("find_selem Error".into()),
+        };
         let (min, max) = selem.get_playback_volume_range();
         // Map le gain PID (output_min/output_max) sur la plage ALSA
         let alsa_gain = min as f32
@@ -45,9 +46,9 @@ impl AudioPID {
         Ok(gain)
     }
     /// Met à jour le PID à partir d'un slice de valeurs (ex: buffer audio), dt calculé automatiquement
-    pub fn update_from_slice(&mut self, setpoint: f32, buffer: &[f32]) -> f32 {
+    pub fn update_from_slice(&mut self, setpoint: f32, buffer: &[f32]) -> Result<f32> {
         if buffer.is_empty() {
-            return 0.0;
+            return Ok(0.0 as f32);
         }
         let sum: f32 = buffer.iter().sum();
         let mean = sum / buffer.len() as f32;
@@ -73,7 +74,7 @@ impl AudioPID {
     }
 
     /// Met à jour le PID avec dt calculé automatiquement
-    pub fn update(&mut self, setpoint: f32, measured: f32) -> f32 {
+    pub fn update(&mut self, setpoint: f32, measured: f32) -> alsa::Result<f32> {
         let now = Instant::now();
         let dt = if let Some(last) = self.last_update {
             let secs = (now - last).as_secs_f32();
@@ -94,6 +95,6 @@ impl AudioPID {
         } else if output < self.output_min {
             output = self.output_min;
         }
-        output
+        Ok(output)
     }
 }
