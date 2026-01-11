@@ -23,7 +23,7 @@ impl AudioPID {
         mixer_name: &str,
         selem_name: &str,
         channel: SelemChannelId,
-    ) -> Result<f32> {
+    ) -> Result<f32, String> {
         if buffer.is_empty() {
             return Ok(0.0);
         }
