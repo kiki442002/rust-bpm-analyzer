@@ -26,7 +26,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         None,
         TARGET_SAMPLE_RATE,
         None,
-        Some(Duration::from_millis(100)), // 100ms de données par paquet
+        Some(Duration::from_millis(250)), // 250ms de données par paquet
     )?;
 
     println!("Audio capture started. Listening... (Press Ctrl+C to stop)");
