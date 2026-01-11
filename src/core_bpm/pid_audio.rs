@@ -54,9 +54,15 @@ impl AudioPID {
         let (selem_id, output_min, output_max) =
             found.ok_or_else(|| "No capture Selem found in mixer".to_string())?;
 
+        // Configure le volume au milieu de la plage
+        let mid = (output_min + output_max) / 2;
+        if let Some(selem) = mixer.find_selem(&selem_id) {
+            let _ = selem.set_capture_volume(SelemChannelId::FrontLeft, mid);
+        }
+
         println!(
-            "AudioPID initialized | Capture Volume Range: {} - {}",
-            output_min, output_max
+            "AudioPID initialized | Capture Volume Range: {} - {} | Volume set to middle: {}",
+            output_min, output_max, mid
         );
         Ok(AudioPID {
             kp,
