@@ -37,15 +37,7 @@ impl AudioPID {
             .map_err(|e| format!("set_capture_volume Error: {}", e))?;
         Ok(gain)
     }
-    /// Met à jour le PID à partir d'un slice de valeurs (ex: buffer audio), dt calculé automatiquement
-    pub fn update_from_slice(&mut self, setpoint: f32, buffer: &[f32]) -> Result<i64, String> {
-        if buffer.is_empty() {
-            return Ok(0);
-        }
-        let sum: f32 = buffer.iter().sum();
-        let mean = sum / buffer.len() as f32;
-        self.update(setpoint, mean)
-    }
+
     pub fn new(kp: f32, ki: f32, kd: f32, mixer: &alsa::Mixer) -> Result<Self, String> {
         let mut found = None;
         for elem in mixer.iter() {
