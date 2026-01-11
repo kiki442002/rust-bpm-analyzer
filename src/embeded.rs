@@ -18,6 +18,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut analyzer = BpmAnalyzer::new(TARGET_SAMPLE_RATE, None)?;
     let mut link_manager = LinkManager::new();
     link_manager.link_state(true); // Active Link
+    let mut pid = AudioPID::new(0.5, 0.1, 0.0, "ADC")?;
 
     let _audio_capture = AudioCapture::new(
         sender,
@@ -34,13 +35,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             Ok(AudioMessage::Samples(packet)) => {
                 new_samples_accumulator.extend(&packet);
                 // PID audio sur chaque paquet de 100ms
-                pid.update_alsa_from_slice(
-                    setpoint,
-                    &packet,
-                    "default",
-                    "default",
-                    SelemChannelId::FrontLeft,
-                )?;
+                pid.update_alsa_from_slice(setpoint, &packet)?;
                 if new_samples_accumulator.len() >= current_hop_size {
                     if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
                         println!(
