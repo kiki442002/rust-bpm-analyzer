@@ -10,7 +10,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting BPM Analyzer (Headless)...");
 
     // Paramètres PID à ajuster selon le système
-    let mut pid = AudioPID::new(0.5, 0.1, 0.0, "ADC")?;
+    let mixer = Mixer::new(mixer_name, false).map_err(|e| e.to_string())?;
+    let mut pid = AudioPID::new(0.5, 0.1, 0.0, &mixer)?;
     let setpoint = 0.5; // Niveau cible RMS (à ajuster)
 
     let (sender, receiver) = mpsc::channel();
@@ -35,7 +36,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             Ok(AudioMessage::Samples(packet)) => {
                 new_samples_accumulator.extend(&packet);
                 // PID audio sur chaque paquet de 100ms
-                pid.update_alsa_from_slice(setpoint, &packet)?;
+                pid.update_alsa_from_slice(setpoint, &packet, &mixer)?;
+
                 if new_samples_accumulator.len() >= current_hop_size {
                     if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
                         println!(

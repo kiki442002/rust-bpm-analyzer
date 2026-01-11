@@ -1,7 +1,6 @@
 use alsa::Mixer;
 use alsa::mixer::{Selem, SelemChannelId, SelemId};
 use std::time::Instant;
-
 pub struct AudioPID {
     kp: f32,
     ki: f32,
@@ -17,7 +16,12 @@ pub struct AudioPID {
 impl AudioPID {
     /// Met à jour le PID à partir d'un buffer et applique le gain à ALSA
     /// `mixer_name` = "default" ou autre, `selem_name` = "Master" ou autre
-    pub fn update_alsa_from_slice(&mut self, setpoint: f32, buffer: &[f32]) -> Result<i64, String> {
+    pub fn update_alsa_from_slice(
+        &mut self,
+        setpoint: f32,
+        buffer: &[f32],
+        mixer: &alsa::Mixer,
+    ) -> Result<i64, String> {
         if buffer.is_empty() {
             return Ok(0);
         }
@@ -43,14 +47,12 @@ impl AudioPID {
         let mean = sum / buffer.len() as f32;
         self.update(setpoint, mean)
     }
-    pub fn new(kp: f32, ki: f32, kd: f32, mixer_name: &str) -> Result<Self, String> {
-        let mixer = Mixer::new(mixer_name, false).map_err(|e| e.to_string())?;
-
+    pub fn new(kp: f32, ki: f32, kd: f32, mixer: &alsa::Mixer) -> Result<Self, String> {
         let mut found = None;
         for elem in mixer.iter() {
             // On n'appelle pas get_selem(). On vérifie directement si l'élément
             // possède les capacités d'un Selem de capture via le Trait.
-            if elem.has_capture_volume() {
+            if Selem::has_capture_volume(&elem) {
                 let (output_min, output_max) = elem.get_capture_volume_range();
 
                 // ATTENTION : 'elem' ne peut pas être stocké facilement car il est lié à la durée de vie du mixer.
@@ -60,7 +62,7 @@ impl AudioPID {
             }
         }
         let (selem_id, output_min, output_max) =
-            found.ok_or_else(|| format!("No capture Selem found in mixer '{}'", mixer_name))?;
+            found.ok_or_else(|| "No capture Selem found in mixer".to_string())?;
         Ok(AudioPID {
             kp,
             ki,
