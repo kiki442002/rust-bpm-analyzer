@@ -10,7 +10,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting BPM Analyzer (Headless)...");
 
     // Paramètres PID à ajuster selon le système
-    let mixer = Mixer::new("ADC", false).map_err(|e: alsa::Error| e.to_string())?;
+    let mixer = Mixer::new("hw:0", false).map_err(|e: alsa::Error| e.to_string())?;
     let mut pid = AudioPID::new(0.5, 0.1, 0.0, &mixer)?;
     let setpoint = 0.5; // Niveau cible RMS (à ajuster)
 
