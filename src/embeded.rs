@@ -38,7 +38,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 // PID audio sur chaque paquet de 100ms
                 println!(
                     "PID output: {}",
-                    pid.update_alsa_from_slice(setpoint, &packet, &mixer)?
+                    pid.update_alsa_from_slice(setpoint, &packet, &mixer, 0.98)?
                 );
 
                 if new_samples_accumulator.len() >= current_hop_size {
