@@ -1,4 +1,3 @@
-use alsa::Mixer;
 use alsa::mixer::{Selem, SelemChannelId, SelemId};
 use std::time::Instant;
 pub struct AudioPID {
@@ -50,14 +49,11 @@ impl AudioPID {
     pub fn new(kp: f32, ki: f32, kd: f32, mixer: &alsa::Mixer) -> Result<Self, String> {
         let mut found = None;
         for elem in mixer.iter() {
-            // On n'appelle pas get_selem(). On vérifie directement si l'élément
-            // possède les capacités d'un Selem de capture via le Trait.
-            if Selem::has_capture_volume(&elem) {
-                let (output_min, output_max) = elem.get_capture_volume_range();
-
-                // ATTENTION : 'elem' ne peut pas être stocké facilement car il est lié à la durée de vie du mixer.
-                // On récupère souvent son identifiant (SelemId) ou on l'utilise directement ici.
-                found = Some((elem.get_id(), output_min, output_max));
+            let selem = alsa::mixer::Selem::from_elem(&elem); // On force la vue Selem
+            if selem.has_capture_volume() {
+                let (min, max) = selem.get_capture_volume_range();
+                let id = selem.get_id();
+                found = Some((id, min, max));
                 break;
             }
         }

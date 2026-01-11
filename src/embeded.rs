@@ -2,7 +2,7 @@ use crate::core_bpm::pid_audio::AudioPID;
 use crate::core_bpm::{AudioCapture, BpmAnalyzer, audio::AudioMessage};
 use crate::network_sync::LinkManager;
 use crate::platform::TARGET_SAMPLE_RATE;
-use alsa::mixer::SelemChannelId;
+use alsa::Mixer;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -10,7 +10,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting BPM Analyzer (Headless)...");
 
     // Paramètres PID à ajuster selon le système
-    let mixer = Mixer::new(mixer_name, false).map_err(|e| e.to_string())?;
+    let mixer = Mixer::new(mixer_name, false).map_err(|e: alsa::Error| e.to_string())?;
     let mut pid = AudioPID::new(0.5, 0.1, 0.0, &mixer)?;
     let setpoint = 0.5; // Niveau cible RMS (à ajuster)
 
