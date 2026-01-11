@@ -38,7 +38,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     setpoint,
                     &packet,
                     "default",
-                    "Master",
+                    "default",
                     SelemChannelId::FrontLeft,
                 )?;
                 if new_samples_accumulator.len() >= current_hop_size {
