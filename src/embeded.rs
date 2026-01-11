@@ -11,8 +11,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Paramètres PID à ajuster selon le système
     let mixer = Mixer::new("hw:0", false).map_err(|e: alsa::Error| e.to_string())?;
-    let mut pid = AudioPID::new(3.0, 1.0, 0.0, &mixer)?;
-    let setpoint = 0.5; // Niveau cible RMS (à ajuster)
+    let mut pid = AudioPID::new(10.0, 5.0, 0.0, &mixer)?;
+    let setpoint = 0.3; // Niveau cible RMS (à ajuster)
 
     let (sender, receiver) = mpsc::channel();
     let mut current_hop_size = TARGET_SAMPLE_RATE as usize / 2; // 0.5s par défaut, comme dans gui
