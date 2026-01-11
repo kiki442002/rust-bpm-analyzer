@@ -44,6 +44,8 @@ impl AudioPID {
         self.update(setpoint, mean)
     }
     pub fn new(kp: f32, ki: f32, kd: f32, mixer_name: &str) -> Result<Self, String> {
+        let mixer = Mixer::new(mixer_name, false).map_err(|e| e.to_string())?;
+
         let mut found = None;
         for elem in mixer.iter() {
             // On n'appelle pas get_selem(). On vérifie directement si l'élément
