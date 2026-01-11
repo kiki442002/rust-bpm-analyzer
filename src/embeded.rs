@@ -34,13 +34,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             Ok(AudioMessage::Samples(packet)) => {
                 new_samples_accumulator.extend(&packet);
                 // PID audio sur chaque paquet de 100ms
-                let _ = pid.update_alsa_from_slice(
+                pid.update_alsa_from_slice(
                     setpoint,
                     &packet,
                     "default",
                     "Master",
                     SelemChannelId::FrontLeft,
-                );
+                )?;
                 if new_samples_accumulator.len() >= current_hop_size {
                     if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
                         println!(

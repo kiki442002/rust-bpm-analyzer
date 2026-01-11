@@ -31,7 +31,8 @@ impl AudioPID {
         let mean = sum / buffer.len() as f32;
         let gain = self.update(setpoint, mean)?;
 
-        let mixer = Mixer::new(mixer_name, false)?;
+        let mixer =
+            Mixer::new(mixer_name, false).map_err(|e| format!("Mixer::new Error: {}", e))?;
         let sid = SelemId::new(selem_name, 0);
         let selem = match mixer.find_selem(&sid) {
             Some(s) => s,
@@ -41,7 +42,9 @@ impl AudioPID {
         // Map le gain PID (output_min/output_max) sur la plage ALSA
         let alsa_gain = min as f32
             + (gain - self.output_min) * (max - min) as f32 / (self.output_max - self.output_min);
-        selem.set_playback_volume(channel, alsa_gain as i64)?;
+        selem
+            .set_playback_volume(channel, alsa_gain as i64)
+            .map_err(|e| format!("set_playback_volume Error: {}", e))?;
         Ok(gain)
     }
     /// Met à jour le PID à partir d'un slice de valeurs (ex: buffer audio), dt calculé automatiquement
