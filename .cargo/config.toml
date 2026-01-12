@@ -19,8 +19,23 @@ linker = "x86_64-w64-mingw32-gcc"
 
 # Milk-V / ARM64 Linux
 # Requires ARM64 toolchain (e.g., aarch64-unknown-linux-gnu-gcc)
-# [target.aarch64-unknown-linux-gnu]
-# linker = "aarch64-unknown-linux-gnu-gcc"
+[target.aarch64-unknown-linux-gnu]
+linker = "host-tools/gcc/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-gcc"
+ar = "host-tools/gcc/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-ar"
+rustflags = [
+    "-L", "host-tools/gcc/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu/aarch64-linux-gnu/libc/usr/lib",
+    "-C", "link-arg=-Wl,-rpath-link,host-tools/gcc/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu/aarch64-linux-gnu/libc/usr/lib",
+    "-C", "link-arg=--sysroot=host-tools/gcc/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu/aarch64-linux-gnu/libc"
+]
+[target.aarch64-unknown-linux-gnu.env]
+PATH = "host-tools/gcc/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu/bin:${PATH}"
+
+[env]
+# Ces variables seront injectées à chaque fois que tu lances cargo
+PKG_CONFIG_ALLOW_CROSS = "1"
+PKG_CONFIG_PATH = "/usr/lib/aarch64-linux-gnu/pkgconfig/"
+BINDGEN_EXTRA_CLANG_ARGS="--sysroot=host-tools/gcc/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu/aarch64-linux-gnu/libc"
+
 
 # Aliases to simplify build commands
 [alias]
@@ -29,3 +44,5 @@ build-linux = "build --release --target x86_64-unknown-linux-gnu"
 build-win = "build --release --target x86_64-pc-windows-gnu"
 build-milkv = "build --release --target aarch64-unknown-linux-gnu"
 build-all = ["build", "--release", "--target", "aarch64-apple-darwin", "--target", "x86_64-unknown-linux-gnu", "--target", "x86_64-pc-windows-gnu", "--target", "aarch64-unknown-linux-gnu"]
+
+

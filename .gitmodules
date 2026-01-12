@@ -1,0 +1,3 @@
+[submodule "host-tools"]
+	path = host-tools
+	url = https://github.com/kiki442002/host-tools.git

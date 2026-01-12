@@ -1,4 +1,5 @@
 #![windows_subsystem = "windows"]
+
 mod core_bpm;
 mod network_sync;
 
@@ -10,7 +11,7 @@ mod gui;
 // Configuration grouped by platform
 #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
 mod platform {
-    pub const TARGET_SAMPLE_RATE: u32 = 11025;
+    pub const TARGET_SAMPLE_RATE: u32 = 12000;
 
     pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!("Starting embedded Mode...");
