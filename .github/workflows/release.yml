@@ -61,10 +61,6 @@ jobs:
         run: |
           choco install llvm
 
-      - name: Install Cross
-        if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
       - name: Install cargo-bundle
         if: matrix.os == 'macos-latest' || (matrix.os == 'ubuntu-latest' && matrix.use_cross == false)
         run: cargo install cargo-bundle
