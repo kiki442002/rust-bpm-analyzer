@@ -35,67 +35,137 @@ Check the [Releases](https://github.com/YOUR_USERNAME/rust-bpm-analyzer/releases
 *   **Windows**: `.exe` installer
 *   **Linux**: `.deb` or `.AppImage`
 
-#### Build from Source
-Ensure you have [Rust installed](https://rustup.rs/).
+# Rust BPM Analyzer
 
-**Prerequisites:**
-*   **Linux**: `sudo apt install libasound2-dev`
-*   **macOS/Windows**: No extra dependencies required.
+![License](https://img.shields.io/badge/license-Non--Commercial-red.svg)
 
-```bash
-git clone https://github.com/YOUR_USERNAME/rust-bpm-analyzer.git
-cd rust-bpm-analyzer
-cargo run --release
-```
+A real-time BPM analyzer and Ableton Link synchronization tool written in Rust.
 
-### Usage
-1.  **Launch the application**.
-2.  **Select Audio Input**: Use the dropdown menu to select the microphone or audio interface listening to the music.
-3.  **Enable Detection**: Click "Enable Detection".
-4.  **Link**: The app will automatically join the Link session. You should see the "Link Peers" count increase if other Link apps are running on the same network.
+This repository contains both a desktop GUI and a headless (embedded) mode intended for Linux systems.
+
+## Overview
+
+Rust BPM Analyzer listens to audio input (microphone or loopback), detects tempo (BPM) in real-time, and synchronizes it with other music software using Ableton Link.
+
+Key capabilities:
+
+- Real-time BPM detection from audio input
+- Ableton Link integration for tempo and phase synchronization
+- Headless mode for embedded Linux devices with ALSA control and automatic hardware gain management
 
 ---
 
-## 🔌 Embedded (Headless)
+## Desktop (GUI)
 
-Designed for embedded Linux devices like Raspberry Pi, Milk-V Duo, or any headless Linux server. It runs without a monitor and automatically starts analysis on the default audio device.
+The GUI is implemented with `iced` and targets macOS, Windows, and Linux (x86_64).
 
-### Features
-*   **Lightweight**: No GUI dependencies, minimal resource usage.
-*   **Auto-Start**: Can be configured to run as a systemd service.
-*   **Optimized**: Specific optimizations for ARM architectures.
+### Build & Run (desktop)
 
-### Cross-Compilation
-The project uses `cross` for compiling to ARM architectures.
+Ensure you have Rust installed via `rustup`. On Linux, ensure `pkg-config` is installed (ALSA libraries are provided by the toolchain):
 
-**Example for Raspberry Pi (64-bit):**
 ```bash
-cross build --release --target aarch64-unknown-linux-gnu
+sudo apt update
+sudo apt install pkg-config
 ```
 
-**Example for Raspberry Pi (32-bit / ARMv7):**
+Build and run (debug):
+
 ```bash
-cross build --release --target armv7-unknown-linux-gnueabihf
+cargo run
 ```
 
-### Usage
-Transfer the binary to your device and run it:
+Build release:
+
 ```bash
+cargo build --release
+```
+
+---
+
+## Headless / Embedded (Linux)
+
+Headless mode runs without a GUI and is intended for Linux systems. For development and CI we assume a standard x86_64 Linux machine is available to build and test; the produced binary can be deployed to the embedded target.
+
+### Prerequisites (build host)
+
+- `rustup` and `cargo`
+- `pkg-config` (required by `alsa-sys`). ALSA libraries and headers are provided by the toolchain, no extra system package required.
+
+If you rely on the repository-provided toolchain (located in the `host-tools` submodule), initialize or update the submodule before building:
+
+```bash
+git submodule update --init --recursive
+# If the submodule is tracked to a remote branch and you want the latest:
+git submodule update --remote --init --recursive
+```
+
+Install on Debian/Ubuntu (if `pkg-config` is missing on your build host):
+
+```bash
+sudo apt update
+sudo apt install pkg-config build-essential
+```
+
+### Build on x86_64 Linux (recommended)
+
+You can build the release binary directly on an x86_64 Linux machine — no cross toolchain required for the supported workflow:
+
+```bash
+cargo build --release --target aarch64-unknown-linux-gnu
+```
+
+The release binary will be at `target/release/rust-bpm-analyzer`.
+
+### Conditional dependencies in `Cargo.toml`
+
+To avoid compiling ALSA-specific crates on desktop platforms, keep ALSA and GPIO dependencies behind a target cfg in `Cargo.toml`:
+
+```toml
+[target.'cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))'.dependencies]
+alsa = "0.9.0"
+gpio-cdev = "0.6.0"
+```
+
+This ensures these crates are only built for ARM Linux targets.
+
+### Deploy to the target
+
+Copy the binary and run on the target (example):
+
+```bash
+scp target/release/rust-bpm-analyzer user@target:/home/user/
+ssh user@target
+chmod +x /home/user/rust-bpm-analyzer
 ./rust-bpm-analyzer
 ```
-*Note: In headless mode, the application will use the system's default audio input device.*
 
----
 
-## Development
+### ALSA checks and utilities
 
-### Project Structure
+On the target, verify ALSA controls with `amixer` / `alsamixer`:
 
-*   `src/core_bpm/`: Audio capture and BPM analysis logic.
-*   `src/network_sync/`: Ableton Link integration.
-*   `src/gui.rs`: User interface implementation (Desktop only).
-*   `src/embeded/`: Headless implementation (Linux only).
-*   `assets/`: Icons and build scripts.
+```bash
+amixer controls
+amixer sget Capture
+amixer sset Capture 50%
+alsamixer
+```
+
+If `pkg-config` is missing in your CI environment, `alsa-sys` will fail to build — run ALSA builds on Linux runners.
+
+## Troubleshooting
+
+- `pkg-config not found`: install `pkg-config` on the build host or CI runner.
+- `No capture Selem found`: verify the audio device provides capture controls (`amixer controls`) and try alternate device names like `hw:0` or `plughw:0`.
+- ALSA on Windows: ALSA is Linux-only. Build ALSA-enabled artifacts on Linux runners and skip ALSA on Windows builds.
+
+## Project structure
+
+- `src/core_bpm/`: Audio capture and BPM analysis logic
+- `src/network_sync/`: Ableton Link integration
+- `src/gui.rs`: GUI (desktop only)
+- `src/embeded.rs`: Headless entry (Linux only)
+- `assets/`: Icons, build scripts
 
 ## License
 
