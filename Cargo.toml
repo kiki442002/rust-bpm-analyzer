@@ -17,10 +17,17 @@ rusty_link = "0.4.6"
 biquad = "0.5.0"
 aubio = { version = "0.2", features = ["bindgen", "static", "builtin"] }
 
+
 # Embedded Linux specific dependencies (Milk-V Duo, Raspberry Pi)
 [target.'cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))'.dependencies]
 alsa = "0.9.0"
 gpio-cdev = "0.6.0"
+linux-embedded-hal = "0.4.1"
+embedded-graphics = "0.8.1"
+ssd1306 = "0.10.0"
+self_update = "0.42.0"
+rtnetlink = "0.20.0"
+tokio = { version = "1.49", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 
 # GUI only for Desktop (Mac, Windows, Linux x86)
 # Exclude Linux ARM/ARM64 (Raspberry Pi, Milk-V)

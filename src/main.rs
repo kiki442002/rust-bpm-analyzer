@@ -30,5 +30,13 @@ mod platform {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    platform::run()
+    #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
+    {
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(platform::run())
+    }
+    #[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]
+    {
+        platform::run()
+    }
 }
