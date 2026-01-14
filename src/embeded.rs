@@ -25,7 +25,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         None,
         TARGET_SAMPLE_RATE,
         None,
-        Some(Duration::from_millis(250)), // 250ms de données par paquet
+        Some(Duration::from_millis(500)), // 500ms de données par paquet
     )?;
 
     println!("Audio capture started. Listening... (Press Ctrl+C to stop)");
@@ -34,10 +34,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         match receiver.recv() {
             Ok(AudioMessage::Samples(packet)) => {
                 new_samples_accumulator.extend(&packet);
-                // PID audio sur chaque paquet de 100ms
+                // PID audio sur chaque paquet de 500ms
                 println!(
                     "PID output: {}",
-                    pid.update_alsa_from_slice(setpoint, &packet, &mixer)?
+                    pid.update_alsa_from_slice(setpoint, &packet, &mixer)?,
                 );
 
                 if new_samples_accumulator.len() >= current_hop_size {
