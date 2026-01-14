@@ -2,10 +2,10 @@ use crate::core_bpm::{AudioCapture, AudioMessage, AudioPID, BpmAnalyzer};
 use crate::network_sync::LinkManager;
 use crate::platform::TARGET_SAMPLE_RATE;
 use alsa::Mixer;
+use std::sync::mpsc;
 use std::time::Duration;
-use tokio::sync::mpsc;
 
-pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting BPM Analyzer (Headless)...");
 
     // Paramètres PID à ajuster selon le système
@@ -13,7 +13,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut pid = AudioPID::new(50.0, 3.0, 0.1, 8, &mixer)?;
     let setpoint = 0.25; // Niveau cible RMS (à ajuster)
 
-    let (sender, mut receiver) = mpsc::channel(8);
+    let (sender, receiver) = mpsc::channel();
     let mut current_hop_size = TARGET_SAMPLE_RATE as usize / 2; // 0.5s par défaut, comme dans gui
     let mut new_samples_accumulator: Vec<f32> = Vec::with_capacity(current_hop_size);
     let mut analyzer = BpmAnalyzer::new(TARGET_SAMPLE_RATE, None)?;
@@ -30,7 +30,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Audio capture started. Listening... (Press Ctrl+C to stop)");
 
-    while let Some(msg) = receiver.recv().await {
+    for msg in receiver {
         match msg {
             AudioMessage::Samples(packet) => {
                 new_samples_accumulator.extend(&packet);
