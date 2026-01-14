@@ -13,9 +13,17 @@ mod gui;
 mod platform {
     pub const TARGET_SAMPLE_RATE: u32 = 12000;
 
-    pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run_async() -> Result<(), Box<dyn std::error::Error>> {
         println!("Starting embedded Mode...");
-        super::embeded::run()
+        // Lancer embeded::run() dans une tâche autonome
+        tokio::spawn(async {
+            if let Err(e) = super::embeded::run().await {
+                eprintln!("embeded::run() error: {}", e);
+            }
+        });
+        // Attendre Ctrl+C pour garder le programme en vie
+        tokio::signal::ctrl_c().await?;
+        Ok(())
     }
 }
 
@@ -29,14 +37,13 @@ mod platform {
     }
 }
 
+#[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    platform::run_async().await
+}
+
+#[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
-    {
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(platform::run())
-    }
-    #[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]
-    {
-        platform::run()
-    }
+    platform::run()
 }
