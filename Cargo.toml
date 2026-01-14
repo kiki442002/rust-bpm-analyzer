@@ -25,7 +25,7 @@ gpio-cdev = "0.6.0"
 linux-embedded-hal = "0.4.1"
 embedded-graphics = "0.8.1"
 ssd1306 = "0.10.0"
-self_update = "0.42.0"
+# self_update = "0.42.0"
 rtnetlink = "0.20.0"
 tokio = { version = "1.49", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 
