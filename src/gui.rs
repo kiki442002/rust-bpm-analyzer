@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::core_bpm::{AudioCapture, BpmAnalyzer, audio::AudioMessage};
+use crate::core_bpm::{AudioCapture, AudioMessage, BpmAnalyzer};
 use crate::network_sync::LinkManager;
 use crate::platform::TARGET_SAMPLE_RATE;
 
