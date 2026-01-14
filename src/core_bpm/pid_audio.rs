@@ -12,6 +12,8 @@ pub mod pid_audio {
         output_max: i64,
         last_update: Option<Instant>,
         selem_id: SelemId,
+        rms_window: usize,
+        rms_history: Vec<f32>,
     }
 
     impl AudioPID {
@@ -27,8 +29,14 @@ pub mod pid_audio {
                 return Ok(0);
             }
             let rms = (buffer.iter().map(|x| x * x).sum::<f32>() / buffer.len() as f32).sqrt();
-            print!("Mean RMS: {:.4} | ", rms);
-            let gain = self.update(setpoint, rms)?;
+            // Ajout à l'historique
+            self.rms_history.push(rms);
+            if self.rms_history.len() > self.rms_window {
+                self.rms_history.remove(0);
+            }
+            let avg_rms = self.rms_history.iter().sum::<f32>() / self.rms_history.len() as f32;
+            print!("Mean RMS: {:.4} | Smoothed RMS: {:.4} | ", rms, avg_rms);
+            let gain = self.update(setpoint, avg_rms)?;
 
             let selem = mixer
                 .find_selem(&self.selem_id)
@@ -40,7 +48,13 @@ pub mod pid_audio {
             Ok(gain)
         }
 
-        pub fn new(kp: f32, ki: f32, kd: f32, mixer: &alsa::Mixer) -> Result<Self, String> {
+        pub fn new(
+            kp: f32,
+            ki: f32,
+            kd: f32,
+            rms_window: usize,
+            mixer: &alsa::Mixer,
+        ) -> Result<Self, String> {
             let mut found = None;
             for elem in mixer.iter() {
                 // On tente de créer un Selem à partir de l'élément
@@ -76,6 +90,8 @@ pub mod pid_audio {
                 output_max,
                 last_update: None,
                 selem_id,
+                rms_window,
+                rms_history: Vec::with_capacity(rms_window),
             })
         }
 
@@ -83,6 +99,7 @@ pub mod pid_audio {
             self.prev_error = 0.0;
             self.integral = 0.0;
             self.last_update = None;
+            self.rms_history.clear();
         }
 
         /// Met à jour le PID avec dt calculé automatiquement
