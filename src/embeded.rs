@@ -1,5 +1,4 @@
-use crate::core_bpm::pid_audio::AudioPID;
-use crate::core_bpm::{AudioCapture, BpmAnalyzer, audio::AudioMessage};
+use crate::core_bpm::{AudioCapture, AudioMessage, AudioPID, BpmAnalyzer};
 use crate::network_sync::LinkManager;
 use crate::platform::TARGET_SAMPLE_RATE;
 use alsa::Mixer;
