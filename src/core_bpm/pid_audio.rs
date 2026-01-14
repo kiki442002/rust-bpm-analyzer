@@ -1,5 +1,5 @@
 #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
-mod pid_audio {
+pub mod pid_audio {
     use alsa::mixer::{Selem, SelemChannelId, SelemId};
     use std::time::Instant;
     pub struct AudioPID {
