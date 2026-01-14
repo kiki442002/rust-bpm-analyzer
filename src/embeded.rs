@@ -5,7 +5,7 @@ use alsa::Mixer;
 use std::sync::mpsc;
 use std::time::Duration;
 
-pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting BPM Analyzer (Headless)...");
 
     // Paramètres PID à ajuster selon le système
