@@ -15,15 +15,7 @@ mod platform {
 
     pub async fn run_async() -> Result<(), Box<dyn std::error::Error>> {
         println!("Starting embedded Mode...");
-        // Lancer embeded::run() dans une tâche autonome
-        tokio::spawn(async {
-            if let Err(e) = super::embeded::run().await {
-                eprintln!("embeded::run() error: {}", e);
-            }
-        });
-        // Attendre Ctrl+C pour garder le programme en vie
-        tokio::signal::ctrl_c().await?;
-        Ok(())
+        super::embeded::run().await
     }
 }
 
