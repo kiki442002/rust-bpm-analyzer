@@ -3,10 +3,23 @@ use crate::network_sync::LinkManager;
 use crate::platform::TARGET_SAMPLE_RATE;
 use alsa::Mixer;
 use std::sync::mpsc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 use tokio::signal;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // Variable d'arrêt partagée
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let stop_flag_ctrlc = stop_flag.clone();
+    // Tâche async qui surveille Ctrl+C
+    tokio::spawn(async move {
+        signal::ctrl_c().await.ok();
+        println!("Ctrl+C reçu, arrêt demandé.");
+        stop_flag_ctrlc.store(true, Ordering::SeqCst);
+    });
     println!("Starting BPM Analyzer (Headless)...");
 
     // Paramètres PID à ajuster selon le système
@@ -31,62 +44,54 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Audio capture started. Listening... (Press Ctrl+C to stop)");
 
-    loop {
-        tokio::select! {
-            msg = tokio::task::spawn_blocking(|| receiver.recv()) => {
-                match msg {
-                    Ok(Ok(msg)) => match msg {
-                        AudioMessage::Samples(packet) => {
-                            new_samples_accumulator.extend(&packet);
-                            println!(
-                                "PID output: {}",
-                                pid.update_alsa_from_slice(setpoint, &packet, &mixer)?,
-                            );
-                            if new_samples_accumulator.len() >= current_hop_size {
-                                if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
-                                    println!(
-                                        "BPM: {:.1} | Drop: {} | Conf: {:.2} | CoarseConf: {:.2}",
-                                        result.bpm, result.is_drop, result.confidence, result.coarse_confidence
-                                    );
-                                    link_manager.update_tempo(
-                                        result.bpm as f64,
-                                        result.is_drop,
-                                        result.beat_offset,
-                                    );
-                                }
-                                new_samples_accumulator.clear();
-                            }
-                        }
-                        AudioMessage::Reset => {
-                            println!("Audio stream reset. Clearing buffers...");
-                            new_samples_accumulator.clear();
-                        }
-                        AudioMessage::SampleRateChanged(rate) => {
-                            println!("Audio sample rate changed to: {} Hz", rate);
-                            match BpmAnalyzer::new(rate, None) {
-                                Ok(new_analyzer) => {
-                                    analyzer = new_analyzer;
-                                    current_hop_size = (rate / 2) as usize;
-                                    if new_samples_accumulator.capacity() < current_hop_size {
-                                        new_samples_accumulator
-                                            .reserve(current_hop_size - new_samples_accumulator.len());
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("Failed to re-initialize analyzer with rate {}: {}", rate, e)
-                                }
-                            }
-                        }
-                    },
-                    Ok(Err(_)) | Err(_) => {
-                        println!("Canal audio fermé, arrêt du programme.");
-                        break;
+    for msg in receiver {
+        if stop_flag.load(Ordering::SeqCst) {
+            println!("Arrêt demandé, sortie de la boucle.");
+            break;
+        }
+        match msg {
+            AudioMessage::Samples(packet) => {
+                new_samples_accumulator.extend(&packet);
+                // PID audio sur chaque paquet de 500ms
+                println!(
+                    "PID output: {}",
+                    pid.update_alsa_from_slice(setpoint, &packet, &mixer)?,
+                );
+
+                if new_samples_accumulator.len() >= current_hop_size {
+                    if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
+                        println!(
+                            "BPM: {:.1} | Drop: {} | Conf: {:.2} | CoarseConf: {:.2}",
+                            result.bpm, result.is_drop, result.confidence, result.coarse_confidence
+                        );
+                        link_manager.update_tempo(
+                            result.bpm as f64,
+                            result.is_drop,
+                            result.beat_offset,
+                        );
                     }
+                    new_samples_accumulator.clear();
                 }
             }
-            _ = signal::ctrl_c() => {
-                println!("Ctrl+C reçu, arrêt du programme.");
-                break;
+            AudioMessage::Reset => {
+                println!("Audio stream reset. Clearing buffers...");
+                new_samples_accumulator.clear();
+            }
+            AudioMessage::SampleRateChanged(rate) => {
+                println!("Audio sample rate changed to: {} Hz", rate);
+                match BpmAnalyzer::new(rate, None) {
+                    Ok(new_analyzer) => {
+                        analyzer = new_analyzer;
+                        current_hop_size = (rate / 2) as usize;
+                        if new_samples_accumulator.capacity() < current_hop_size {
+                            new_samples_accumulator
+                                .reserve(current_hop_size - new_samples_accumulator.len());
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to re-initialize analyzer with rate {}: {}", rate, e)
+                    }
+                }
             }
         }
     }
