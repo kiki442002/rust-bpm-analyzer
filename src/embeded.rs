@@ -24,7 +24,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Paramètres PID à ajuster selon le système
     let mixer = Mixer::new("hw:0", false).map_err(|e: alsa::Error| e.to_string())?;
-    let mut pid = AudioPID::new(70.0, 2.0, 0.1, 8, &mixer)?;
+    let mut pid = AudioPID::new(60.0, 2.5, 0.1, 8, &mixer)?;
     let setpoint = 0.25; // Niveau cible RMS (à ajuster)
 
     let (sender, receiver) = mpsc::channel();
