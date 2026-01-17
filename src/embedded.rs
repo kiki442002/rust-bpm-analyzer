@@ -1,6 +1,6 @@
 use crate::core_bpm::{AudioCapture, AudioMessage, AudioPID, BpmAnalyzer};
-use crate::core_embedded::Updater;
 use crate::network_sync::LinkManager;
+use crate::network_sync::update::update::Updater;
 use crate::platform::TARGET_SAMPLE_RATE;
 use alsa::Mixer;
 use std::sync::mpsc;
