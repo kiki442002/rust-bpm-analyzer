@@ -3,7 +3,6 @@ use crate::network_sync::LinkManager;
 use crate::network_sync::update::update::Updater;
 use crate::platform::TARGET_SAMPLE_RATE;
 use alsa::Mixer;
-use self_update::cargo_crate_version;
 use std::sync::mpsc;
 use std::sync::{
     Arc,
