@@ -1,7 +1,9 @@
 use crate::core_bpm::{AudioCapture, AudioMessage, AudioPID, BpmAnalyzer};
+use crate::display::display::BpmDisplay;
 use crate::network_sync::LinkManager;
 use crate::network_sync::update::update::Updater;
 use crate::platform::TARGET_SAMPLE_RATE;
+use crate::update::update::Updater;
 use alsa::Mixer;
 use display::display::BpmDisplay;
 use linux_embedded_hal::I2cdev;
@@ -15,7 +17,6 @@ use tokio::signal;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Initialisation de l'écran OLED sur I2C3 (ex: /dev/i2c-3)
-    #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
     let i2c = I2cdev::new("/dev/i2c-3")?;
     let mut bpm_display: Option<_> = match BpmDisplay::new(i2c) {
         Ok(d) => Some(d),

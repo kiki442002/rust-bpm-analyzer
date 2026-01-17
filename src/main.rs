@@ -1,7 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod core_bpm;
-mod display;
+mod core_embedded;
 mod network_sync;
 
 #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
