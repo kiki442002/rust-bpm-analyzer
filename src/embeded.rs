@@ -10,7 +10,20 @@ use std::sync::{
 use std::time::Duration;
 use tokio::signal;
 
+#[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
+use crate::core_embedded::update::update::Updater;
+
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // Vérification et application d'une mise à jour si disponible (auto-update)
+    #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
+    {
+        let updater = Updater::new(
+            "kiki442002",        // Remplace par ton nom d'utilisateur GitHub si besoin
+            "rust-bpm-analyzer", // Nom du repo GitHub
+            "rust-bpm-analyzer", // Nom du binaire
+        );
+        let _ = updater.check_and_update();
+    }
     // Variable d'arrêt partagée
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_flag_ctrlc = stop_flag.clone();

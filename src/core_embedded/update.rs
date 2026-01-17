@@ -13,6 +13,23 @@ pub mod update {
     }
 
     impl Updater {
+        /// Vérifie s'il existe une mise à jour disponible sur GitHub sans l'appliquer.
+        pub fn check(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
+            let status = self_update::backends::github::Update::configure()
+                .repo_owner(&self.repo_owner)
+                .repo_name(&self.repo_name)
+                .bin_name(&self.bin_name)
+                .show_download_progress(false)
+                .current_version(cargo_crate_version!())
+                .build()? // construit la config
+                .get_latest_release()?;
+
+            if status.version != cargo_crate_version!() {
+                Ok(Some(status.version))
+            } else {
+                Ok(None)
+            }
+        }
         pub fn new(repo_owner: &str, repo_name: &str, bin_name: &str) -> Self {
             let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from(bin_name));
             let backup_path = exe.with_extension("bak");
@@ -34,7 +51,7 @@ pub mod update {
                 .repo_name(&self.repo_name)
                 .bin_name(&self.bin_name)
                 .show_download_progress(true)
-                .current_version(env!("CARGO_PKG_VERSION"))
+                .current_version(cargo_crate_version!())
                 .build()? // construit la config
                 .update(); // lance la mise à jour
 
