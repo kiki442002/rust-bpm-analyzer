@@ -1,4 +1,6 @@
 use crate::core_bpm::{AudioCapture, AudioMessage, AudioPID, BpmAnalyzer};
+#[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
+use crate::display::display::BpmDisplay;
 use crate::network_sync::LinkManager;
 use crate::network_sync::update::update::Updater;
 use crate::platform::TARGET_SAMPLE_RATE;
@@ -12,6 +14,16 @@ use std::time::Duration;
 use tokio::signal;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialisation de l'écran OLED sur I2C3 (ex: /dev/i2c-3)
+    #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
+    let i2c = I2cdev::new("/dev/i2c-3")?;
+    let mut bpm_display = match BpmDisplay::new(i2c) {
+        Ok(d) => Some(d),
+        Err(e) => {
+            eprintln!("Erreur init écran OLED: {}", e);
+            None
+        }
+    };
     // Vérification et application d'une mise à jour si disponible (auto-update)
 
     let updater = Updater::new(
@@ -79,6 +91,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             result.is_drop,
                             result.beat_offset,
                         );
+                        // Affichage BPM sur l'écran OLED si dispo
+                        #[cfg(all(
+                            any(target_arch = "aarch64", target_arch = "arm"),
+                            target_os = "linux"
+                        ))]
+                        if let Some(display) = bpm_display.as_mut() {
+                            let _ = display.show_bpm(result.bpm);
+                        }
                     }
                     new_samples_accumulator.clear();
                 }
