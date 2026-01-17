@@ -15,7 +15,7 @@ mod platform {
 
     pub async fn run_async() -> Result<(), Box<dyn std::error::Error>> {
         println!("Starting embedded Mode...");
-        super::embeded::run().await
+        super::embedded::run().await
     }
 }
 

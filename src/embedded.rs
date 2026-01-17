@@ -14,7 +14,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Vérification et application d'une mise à jour si disponible (auto-update)
     #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
     {
-        use crate::embeded::Updater;
+        use crate::core_embedded::Updater;
         let updater = Updater::new(
             "kiki442002",        // Remplace par ton nom d'utilisateur GitHub si besoin
             "rust-bpm-analyzer", // Nom du repo GitHub
