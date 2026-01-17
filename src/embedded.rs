@@ -1,11 +1,9 @@
-mod display;
-
 use crate::core_bpm::{AudioCapture, AudioMessage, AudioPID, BpmAnalyzer};
-use crate::display::display::BpmDisplay;
 use crate::network_sync::LinkManager;
 use crate::network_sync::update::update::Updater;
 use crate::platform::TARGET_SAMPLE_RATE;
 use alsa::Mixer;
+use display::display::BpmDisplay;
 use linux_embedded_hal::I2cdev;
 use std::sync::mpsc;
 use std::sync::{
