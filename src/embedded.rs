@@ -17,7 +17,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Initialisation de l'écran OLED sur I2C3 (ex: /dev/i2c-3)
     #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
     let i2c = I2cdev::new("/dev/i2c-3")?;
-    let mut bpm_display = match BpmDisplay::new(i2c) {
+    let mut bpm_display: Option<_> = match BpmDisplay::new(i2c) {
         Ok(d) => Some(d),
         Err(e) => {
             eprintln!("Erreur init écran OLED: {}", e);
