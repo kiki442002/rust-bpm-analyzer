@@ -1,4 +1,4 @@
-#[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
+#[cfg(all(target_arch = "aarch64", target_os = "linux"))]
 pub mod display {
     use embedded_graphics::mono_font::{MonoTextStyle, ascii::FONT_6X10};
     use embedded_graphics::prelude::*;

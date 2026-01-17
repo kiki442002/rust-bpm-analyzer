@@ -5,6 +5,8 @@ use crate::network_sync::LinkManager;
 use crate::network_sync::update::update::Updater;
 use crate::platform::TARGET_SAMPLE_RATE;
 use alsa::Mixer;
+use linux_embedded_hal::I2cdev;
+use linux_embedded_hal::I2cdev;
 use std::sync::mpsc;
 use std::sync::{
     Arc,
