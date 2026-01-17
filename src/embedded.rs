@@ -1,9 +1,8 @@
 use crate::core_bpm::{AudioCapture, AudioMessage, AudioPID, BpmAnalyzer};
-use crate::display::display::BpmDisplay;
+use crate::core_embedded::display::display::BpmDisplay;
+use crate::core_embedded::update::update::Updater;
 use crate::network_sync::LinkManager;
-use crate::network_sync::update::update::Updater;
 use crate::platform::TARGET_SAMPLE_RATE;
-use crate::update::update::Updater;
 use alsa::Mixer;
 use display::display::BpmDisplay;
 use linux_embedded_hal::I2cdev;
