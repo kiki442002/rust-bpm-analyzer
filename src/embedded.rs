@@ -1,11 +1,9 @@
 use crate::core_bpm::{AudioCapture, AudioMessage, AudioPID, BpmAnalyzer};
-#[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
-use crate::display::display::BpmDisplay;
+use crate::display::BpmDisplay;
 use crate::network_sync::LinkManager;
 use crate::network_sync::update::update::Updater;
 use crate::platform::TARGET_SAMPLE_RATE;
 use alsa::Mixer;
-use linux_embedded_hal::I2cdev;
 use linux_embedded_hal::I2cdev;
 use std::sync::mpsc;
 use std::sync::{
