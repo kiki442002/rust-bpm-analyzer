@@ -1,4 +1,5 @@
 use crate::core_bpm::{AudioCapture, AudioMessage, AudioPID, BpmAnalyzer};
+use crate::core_embedded::Updater;
 use crate::network_sync::LinkManager;
 use crate::platform::TARGET_SAMPLE_RATE;
 use alsa::Mixer;
@@ -12,16 +13,14 @@ use tokio::signal;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Vérification et application d'une mise à jour si disponible (auto-update)
-    #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
-    {
-        use crate::core_embedded::Updater;
-        let updater = Updater::new(
-            "kiki442002",        // Remplace par ton nom d'utilisateur GitHub si besoin
-            "rust-bpm-analyzer", // Nom du repo GitHub
-            "rust-bpm-analyzer", // Nom du binaire
-        );
-        let _ = updater.check_and_update();
-    }
+
+    let updater = Updater::new(
+        "kiki442002",        // Remplace par ton nom d'utilisateur GitHub si besoin
+        "rust-bpm-analyzer", // Nom du repo GitHub
+        "rust-bpm-analyzer", // Nom du binaire
+    );
+    let _ = updater.check_and_update();
+
     // Variable d'arrêt partagée
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_flag_ctrlc = stop_flag.clone();
