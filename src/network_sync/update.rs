@@ -78,13 +78,15 @@ pub mod update {
 
         fn restart(&self) -> Result<(), Box<dyn std::error::Error>> {
             let exe = std::env::current_exe()?;
-            std::process::Command::new(&exe)
-                .before_exec(|| {
-                    unsafe { libc::setsid() };
-                    Ok(())
-                })
-                .spawn()?;
-            std::process::exit(0);
+            unsafe {
+                std::process::Command::new(&exe)
+                    .before_exec(|| {
+                        libc::setsid();
+                        Ok(())
+                    })
+                    .spawn()?;
+                std::process::exit(0);
+            }
         }
 
         pub fn rollback(&self) -> Result<(), Box<dyn std::error::Error>> {
