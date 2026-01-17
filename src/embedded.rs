@@ -1,5 +1,7 @@
+mod display;
+
 use crate::core_bpm::{AudioCapture, AudioMessage, AudioPID, BpmAnalyzer};
-use crate::display::BpmDisplay;
+use crate::display::display::BpmDisplay;
 use crate::network_sync::LinkManager;
 use crate::network_sync::update::update::Updater;
 use crate::platform::TARGET_SAMPLE_RATE;
