@@ -4,7 +4,7 @@ mod core_bpm;
 mod network_sync;
 
 #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
-mod embeded;
+mod embedded;
 #[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]
 mod gui;
 
