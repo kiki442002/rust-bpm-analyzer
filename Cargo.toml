@@ -1,6 +1,6 @@
 [package]
 name = "rust-bpm-analyzer"
-version = "0.0.1"
+version = "0.1.1"
 edition = "2024"
 authors = ["Killian PICOT"]
 description = "A real-time BPM analyzer with Ableton Link synchronization."
