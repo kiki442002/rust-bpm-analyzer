@@ -75,7 +75,9 @@ jobs:
             cargo build --release --target ${{ matrix.target }} --verbose
             
             # Compress binary for self_update
-            tar -czvf rust-bpm-analyzer-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release rust-bpm-analyzer
+            # Ensure the binary inside the tar is named exactly "rust-bpm-analyzer"
+            cp target/${{ matrix.target }}/release/rust-bpm-analyzer rust-bpm-analyzer
+            tar -czvf rust-bpm-analyzer-${{ matrix.target }}.tar.gz rust-bpm-analyzer
 
           elif [ "${{ matrix.os }}" == "windows-latest" ]; then
             # --- Windows (.exe only) ---
