@@ -4,8 +4,6 @@ use crate::core_embedded::update::update::Updater;
 use crate::network_sync::LinkManager;
 use crate::platform::TARGET_SAMPLE_RATE;
 use alsa::Mixer;
-use display::display::BpmDisplay;
-use linux_embedded_hal::I2cdev;
 use std::sync::mpsc;
 use std::sync::{
     Arc,
@@ -16,8 +14,7 @@ use tokio::signal;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Initialisation de l'écran OLED sur I2C3 (ex: /dev/i2c-3)
-    let i2c = I2cdev::new("/dev/i2c-3")?;
-    let mut bpm_display: Option<_> = match BpmDisplay::new(i2c) {
+    let mut bpm_display: Option<_> = match BpmDisplay::new("/dev/i2c-3") {
         Ok(d) => Some(d),
         Err(e) => {
             eprintln!("Erreur init écran OLED: {}", e);

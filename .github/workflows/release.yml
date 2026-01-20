@@ -73,7 +73,9 @@ jobs:
             echo "Building for ARM ..."
             git submodule update --init --recursive
             cargo build --release --target ${{ matrix.target }} --verbose
-            cp target/${{ matrix.target }}/release/rust-bpm-analyzer rust-bpm-analyzer-${{ matrix.target }}
+            
+            # Compress binary for self_update
+            tar -czvf rust-bpm-analyzer-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release rust-bpm-analyzer
 
           elif [ "${{ matrix.os }}" == "windows-latest" ]; then
             # --- Windows (.exe only) ---
@@ -124,7 +126,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            rust-bpm-analyzer-${{ matrix.target }}
+            rust-bpm-analyzer-${{ matrix.target }}.tar.gz
             rust-bpm-analyzer-${{ matrix.target }}.exe
             rust-bpm-analyzer-${{ matrix.target }}.dmg
             rust-bpm-analyzer-${{ matrix.target }}.deb

@@ -1,7 +1,6 @@
 #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
 pub mod led {
     use gpio_cdev::{Chip, LineHandle, LineRequestFlags};
-    use std::time::Duration;
     use tokio::task;
     use tokio::time::{Duration, sleep};
 

@@ -21,6 +21,7 @@ pub mod update {
                 .repo_owner(&self.repo_owner)
                 .repo_name(&self.repo_name)
                 .bin_name(&self.bin_name)
+                .target("aarch64-unknown-linux-gnu") // Cible explicite
                 .show_download_progress(false)
                 .current_version(cargo_crate_version!())
                 .build()? // construit la config
@@ -52,6 +53,8 @@ pub mod update {
                 .repo_owner(&self.repo_owner)
                 .repo_name(&self.repo_name)
                 .bin_name(&self.bin_name)
+                .target("aarch64-unknown-linux-gnu") // Cible explicite
+                .no_confirm(true) // Ne pas demander confirmation
                 .show_download_progress(true)
                 .current_version(cargo_crate_version!())
                 .build()? // construit la config
