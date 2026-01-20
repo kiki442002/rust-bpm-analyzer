@@ -11,7 +11,6 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-
 use std::time::Duration;
 use tokio::signal;
 
