@@ -32,21 +32,6 @@ pub mod led {
             Ok(())
         }
 
-        /// Fait clignoter la LED n fois avec un délai en ms (async)
-        pub async fn blink(
-            &self,
-            times: u32,
-            delay_ms: u64,
-        ) -> Result<(), Box<dyn std::error::Error>> {
-            for _ in 0..times {
-                self.on()?;
-                sleep(Duration::from_millis(delay_ms)).await;
-                self.off()?;
-                sleep(Duration::from_millis(delay_ms)).await;
-            }
-            Ok(())
-        }
-
         /// Fait clignoter la LED dans une tâche tokio (non bloquant)
         pub fn blink_async(self: Arc<Self>, times: u32, delay_ms: u64) {
             task::spawn(async move {
