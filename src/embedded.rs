@@ -1,34 +1,48 @@
 use crate::core_bpm::{AudioCapture, AudioMessage, AudioPID, BpmAnalyzer};
 use crate::core_embedded::display::display::BpmDisplay;
-use crate::core_embedded::update::update::Updater;
+use crate::core_embedded::led::led::Led;
+use crate::core_embedded::network::network;
 use crate::network_sync::LinkManager;
 use crate::platform::TARGET_SAMPLE_RATE;
 use alsa::Mixer;
 use std::sync::mpsc;
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
 use tokio::signal;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialisation de l'écran OLED sur I2C3 (ex: /dev/i2c-3)
-    let mut bpm_display: Option<_> = match BpmDisplay::new("/dev/i2c-3") {
-        Ok(d) => Some(d),
+    // Initialisation de la LED de statut
+    Led::new("/dev/gpiochip4", 2)?.on()?; // Allume une LED de statut
+
+    // Initialisation de l'écran OLED
+    let bpm_display: Option<_> = match BpmDisplay::new("/dev/i2c-2") {
+        Ok(d) => Some(Arc::new(Mutex::new(d))),
         Err(e) => {
             eprintln!("Erreur init écran OLED: {}", e);
             None
         }
     };
-    // Vérification et application d'une mise à jour si disponible (auto-update)
 
-    let updater = Updater::new(
-        "kiki442002",        // Remplace par ton nom d'utilisateur GitHub si besoin
-        "rust-bpm-analyzer", // Nom du repo GitHub
-        "rust-bpm-analyzer", // Nom du binaire
-    );
-    let _ = updater.check_and_update();
+    // Lancement de l'écoute des événements DHCP (si applicable)
+    #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
+    {
+        tokio::spawn(network::listen_interface_events(bpm_display.clone()));
+
+        // Lancement de l'écoute USB (script custom)
+        use crate::core_embedded::usb::usb;
+        tokio::spawn(usb::listen_usb_events());
+    }
+
+    // // Vérification et application d'une mise à jour si disponible (auto-update)
+    // let updater = Updater::new(
+    //     "kiki442002",        // Remplace par ton nom d'utilisateur GitHub si besoin
+    //     "rust-bpm-analyzer", // Nom du repo GitHub
+    //     "rust-bpm-analyzer", // Nom du binaire
+    // );
+    // let _ = updater.check_and_update();
 
     // Variable d'arrêt partagée
     let stop_flag = Arc::new(AtomicBool::new(false));
@@ -71,11 +85,20 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         match msg {
             AudioMessage::Samples(packet) => {
                 new_samples_accumulator.extend(&packet);
-                // PID audio sur chaque paquet de 500ms
-                println!(
-                    "PID output: {}",
-                    pid.update_alsa_from_slice(setpoint, &packet, &mixer)?,
-                );
+                match pid.update_alsa_from_slice(setpoint, &packet, &mixer) {
+                    Ok((gain, rms)) => {
+                        //println!("PID output gain: {}", gain);
+                        if let Some(display_mutex) = &bpm_display {
+                            // On tente de verrouiller le mutex sans bloquer l'audio
+                            if let Ok(mut guard) = display_mutex.try_lock() {
+                                let _ = guard.update_audio_bar(rms);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("PID update error: {}", e);
+                    }
+                }
 
                 if new_samples_accumulator.len() >= current_hop_size {
                     if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
@@ -93,8 +116,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             any(target_arch = "aarch64", target_arch = "arm"),
                             target_os = "linux"
                         ))]
-                        if let Some(display) = bpm_display.as_mut() {
-                            let _ = display.show_bpm(result.bpm);
+                        // L'écran est un Option<Arc<Mutex<BpmDisplay>>>
+                        if let Some(display_mutex) = &bpm_display {
+                            // On tente de verrouiller le mutex sans bloquer l'audio
+                            if let Ok(mut guard) = display_mutex.try_lock() {
+                                let _ = guard.show_bpm(result.bpm);
+                            }
                         }
                     }
                     new_samples_accumulator.clear();
