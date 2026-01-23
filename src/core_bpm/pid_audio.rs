@@ -24,9 +24,9 @@ pub mod pid_audio {
             setpoint: f32,
             buffer: &[f32],
             mixer: &alsa::Mixer,
-        ) -> Result<i64, String> {
+        ) -> Result<(i64, f32), String> {
             if buffer.is_empty() {
-                return Ok(0);
+                return Ok((0, 0.0));
             }
             let rms = (buffer.iter().map(|x| x * x).sum::<f32>() / buffer.len() as f32).sqrt();
             // Ajout à l'historique
@@ -35,7 +35,7 @@ pub mod pid_audio {
                 self.rms_history.remove(0);
             }
             let avg_rms = self.rms_history.iter().sum::<f32>() / self.rms_history.len() as f32;
-            print!("Mean RMS: {:.4} | Smoothed RMS: {:.4} | ", rms, avg_rms);
+            //print!("Mean RMS: {:.4} | Smoothed RMS: {:.4} | ", rms, avg_rms);
             let gain = self.update(setpoint, avg_rms)?;
 
             let selem = mixer
@@ -45,7 +45,7 @@ pub mod pid_audio {
             selem
                 .set_capture_volume(SelemChannelId::FrontLeft, gain)
                 .map_err(|e| format!("set_capture_volume Error: {}", e))?;
-            Ok(gain)
+            Ok((gain, rms))
         }
 
         pub fn new(
@@ -67,9 +67,10 @@ pub mod pid_audio {
                     }
                 }
             }
-            let (selem_id, output_min, output_max) =
+            let (selem_id, output_min, mut output_max) =
                 found.ok_or_else(|| "No capture Selem found in mixer".to_string())?;
 
+            output_max -= 4; // Ajustement pour éviter les dépassements
             // Configure le volume au milieu de la plage
             let mid = (output_min + output_max) / 2;
             if let Some(selem) = mixer.find_selem(&selem_id) {
