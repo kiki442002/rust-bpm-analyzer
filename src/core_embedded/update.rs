@@ -1,9 +1,7 @@
 #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
 pub mod update {
     use self_update::cargo_crate_version;
-    use std::fs;
     use std::os::unix::process::CommandExt;
-    use std::path::PathBuf;
 
     #[derive(Clone)]
     pub struct Updater {
@@ -33,7 +31,6 @@ pub mod update {
             Ok(None)
         }
         pub fn new(repo_owner: &str, repo_name: &str, bin_name: &str) -> Self {
-            let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from(bin_name));
             Updater {
                 repo_owner: repo_owner.to_string(),
                 repo_name: repo_name.to_string(),
