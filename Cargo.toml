@@ -1,6 +1,6 @@
 [package]
 name = "rust-bpm-analyzer"
-version = "0.1.2"
+version = "0.1.0"
 edition = "2024"
 authors = ["Killian PICOT"]
 description = "A real-time BPM analyzer with Ableton Link synchronization."
@@ -18,8 +18,9 @@ biquad = "0.5.0"
 aubio = { version = "0.2", features = ["bindgen", "static", "builtin"] }
 
 
+
 # Embedded Linux specific dependencies (Milk-V Duo, Raspberry Pi)
-[target.'cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))'.dependencies]
+[target.aarch64-unknown-linux-gnu.dependencies]
 alsa = "0.9.0"
 gpio-cdev = "0.6.0"
 linux-embedded-hal = "0.4.1"
@@ -27,14 +28,21 @@ embedded-graphics = "0.8.1"
 ssd1306 = "0.10.0"
 self_update = { version = "0.42", default-features = false, features = ["rustls", "archive-tar"] }
 rtnetlink = "0.20.0"
-tokio = { version = "1.49", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "signal"] }
+tokio = { version = "1.49", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "signal", "process"] }
 libc = "0.2.180"
+tinybmp = "0.7.0"
+netlink-packet-core = "0.8.1"
+netlink-packet-route = "0.28.0"
+futures = "0.3.31"
 
 # GUI only for Desktop (Mac, Windows, Linux x86)
 # Exclude Linux ARM/ARM64 (Raspberry Pi, Milk-V)
 [target.'cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))'.dependencies]
 iced = "0.13"
 image = "0.24" # To load the window icon
+
+
+
 
 [build-dependencies]
 winres = "0.1"
