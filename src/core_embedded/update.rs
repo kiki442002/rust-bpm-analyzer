@@ -10,7 +10,6 @@ pub mod update {
         repo_owner: String,
         repo_name: String,
         bin_name: String,
-        backup_path: PathBuf,
     }
 
     impl Updater {
@@ -35,20 +34,14 @@ pub mod update {
         }
         pub fn new(repo_owner: &str, repo_name: &str, bin_name: &str) -> Self {
             let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from(bin_name));
-            let backup_path = exe.with_extension("bak");
             Updater {
                 repo_owner: repo_owner.to_string(),
                 repo_name: repo_name.to_string(),
                 bin_name: bin_name.to_string(),
-                backup_path,
             }
         }
 
         pub fn check_and_update(&self) -> Result<(), Box<dyn std::error::Error>> {
-            let exe = std::env::current_exe()?;
-            // Sauvegarde l'ancien binaire
-            fs::copy(&exe, &self.backup_path)?;
-
             // Configuration de l'update selon l'exemple github
             let status = self_update::backends::github::Update::configure()
                 .repo_owner(&self.repo_owner)
