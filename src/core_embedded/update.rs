@@ -1,6 +1,5 @@
 #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
 pub mod update {
-    use self_update::backends::github::Update;
     use self_update::cargo_crate_version;
     use std::fs;
     use std::os::unix::process::CommandExt;

@@ -89,12 +89,7 @@ pub mod network {
         IS_CHECKING_UPDATE.store(false, Ordering::SeqCst);
     }
 
-    fn update_link_status(
-        display: &Option<Arc<Mutex<BpmDisplay>>>,
-        name: &str,
-        is_up: bool,
-        updater: Option<Updater>,
-    ) {
+    fn update_link_status(display: &Option<Arc<Mutex<BpmDisplay>>>, name: &str, is_up: bool) {
         if name != "eth0" && name != "usb0" {
             // On ne gère que eth0 et usb0
             return;
@@ -182,7 +177,7 @@ pub mod network {
                                 updater.clone(),
                             ));
                         }
-                        update_link_status(&display, &name, is_up, Some(updater.clone()));
+                        update_link_status(&display, &name, is_up);
                     }
                 }
                 Err(e) => eprintln!("Erreur lors du scan initial: {}", e),
@@ -218,7 +213,7 @@ pub mod network {
                                 updater.clone(),
                             ));
                         }
-                        update_link_status(&display, &name, is_up, Some(updater.clone()));
+                        update_link_status(&display, &name, is_up);
                     } else {
                         // println!("DEBUG: Interface index {} changed but name unknown", link_msg.header.index);
                     }
