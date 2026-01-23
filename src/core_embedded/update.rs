@@ -7,6 +7,7 @@ pub mod update {
     use std::os::unix::process::CommandExt;
     use std::path::PathBuf;
 
+    #[derive(Clone)]
     pub struct Updater {
         repo_owner: String,
         repo_name: String,
@@ -83,7 +84,7 @@ pub mod update {
             let exe = std::env::current_exe()?;
             unsafe {
                 std::process::Command::new(&exe)
-                    .before_exec(|| {
+                    .pre_exec(|| {
                         libc::setsid();
                         Ok(())
                     })
