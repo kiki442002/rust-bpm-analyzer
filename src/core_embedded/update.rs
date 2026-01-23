@@ -80,16 +80,5 @@ pub mod update {
             let err = std::process::Command::new(&exe).exec();
             Err(Box::new(err))
         }
-
-        pub fn rollback(&self) -> Result<(), Box<dyn std::error::Error>> {
-            let exe = std::env::current_exe()?;
-            if self.backup_path.exists() {
-                fs::copy(&self.backup_path, &exe)?;
-                println!("Rollback effectué : ancien binaire restauré.");
-            } else {
-                println!("Aucun backup trouvé pour rollback.");
-            }
-            Ok(())
-        }
     }
 }
