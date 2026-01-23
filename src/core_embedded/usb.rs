@@ -1,7 +1,7 @@
 #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
 pub mod usb {
     use std::io;
-    use std::os::unix::io::{AsRawFd, RawFd};
+    use std::os::unix::io::RawFd;
     use tokio::io::unix::AsyncFd;
     use tokio::process::Command;
 

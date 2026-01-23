@@ -54,6 +54,7 @@ impl LinkManager {
         self.link.enable(enable);
     }
 
+    #[allow(dead_code)]
     pub fn num_peers(&self) -> usize {
         self.link.num_peers() as usize
     }

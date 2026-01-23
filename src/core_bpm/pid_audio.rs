@@ -96,6 +96,7 @@ pub mod pid_audio {
             })
         }
 
+        #[allow(dead_code)]
         pub fn reset(&mut self) {
             self.prev_error = 0.0;
             self.integral = 0.0;

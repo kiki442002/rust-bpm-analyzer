@@ -86,7 +86,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             AudioMessage::Samples(packet) => {
                 new_samples_accumulator.extend(&packet);
                 match pid.update_alsa_from_slice(setpoint, &packet, &mixer) {
-                    Ok((gain, rms)) => {
+                    Ok((_, rms)) => {
                         //println!("PID output gain: {}", gain);
                         if let Some(display_mutex) = &bpm_display {
                             // On tente de verrouiller le mutex sans bloquer l'audio

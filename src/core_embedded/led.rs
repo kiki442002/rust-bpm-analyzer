@@ -26,12 +26,14 @@ pub mod led {
             Ok(())
         }
 
+        #[allow(dead_code)]
         /// Éteint la LED
         pub fn off(&self) -> Result<(), Box<dyn std::error::Error>> {
             self.handle.set_value(0)?;
             Ok(())
         }
 
+        #[allow(dead_code)]
         /// Fait clignoter la LED dans une tâche tokio (non bloquant)
         pub fn blink_async(self: Arc<Self>, times: u32, delay_ms: u64) {
             task::spawn(async move {

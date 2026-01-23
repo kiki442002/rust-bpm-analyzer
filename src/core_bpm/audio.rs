@@ -358,6 +358,7 @@ impl AudioCapture {
         })
     }
 
+    #[allow(dead_code)]
     pub fn list_devices() -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let host = cpal::default_host();
         let devices = host.input_devices()?;
@@ -370,11 +371,13 @@ impl AudioCapture {
         Ok(names)
     }
 
+    #[allow(dead_code)]
     pub fn default_device_name() -> Option<String> {
         let host = cpal::default_host();
         host.default_input_device().and_then(|d| d.name().ok())
     }
 
+    #[allow(dead_code)]
     pub fn set_device(
         &mut self,
         device_name: Option<String>,

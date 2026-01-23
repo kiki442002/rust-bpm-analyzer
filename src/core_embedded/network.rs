@@ -12,7 +12,7 @@ pub mod network {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use tokio::process::Command;
-    use tokio::time::{Duration, timeout};
+    use tokio::time::Duration;
 
     // Flag statique pour empêcher l'exécution simultanée multiple
     static IS_CHECKING_UPDATE: AtomicBool = AtomicBool::new(false);
