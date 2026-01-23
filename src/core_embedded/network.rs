@@ -60,18 +60,26 @@ pub mod network {
             }
 
             println!("Vérification des mises à jour...");
-            match updater.check() {
-                Ok(Some(new_version)) => {
-                    println!("Mise à jour disponible : {}", new_version);
-                    if let Some(disp_arc) = &display {
-                        if let Ok(mut disp) = disp_arc.lock() {
-                            let _ = disp.draw_status_icon(StatusBarIcon::Update);
-                            let _ = disp.flush();
-                        }
-                    }
+            // match updater.check() {
+            //     Ok(Some(new_version)) => {
+            //         println!("Mise à jour disponible : {}", new_version);
+            //         if let Some(disp_arc) = &display {
+            //             if let Ok(mut disp) = disp_arc.lock() {
+            //                 let _ = disp.draw_status_icon(StatusBarIcon::Update);
+            //                 let _ = disp.flush();
+            //             }
+            //         }
+            //     }
+            //     Ok(None) => println!("Pas de mise à jour."),
+            //     Err(e) => eprintln!("Erreur check update: {}", e),
+            // }
+            match updater.check_and_update() {
+                Ok(_) => {
+                    println!("Mise à jour réussie !");
                 }
-                Ok(None) => println!("Pas de mise à jour."),
-                Err(e) => eprintln!("Erreur check update: {}", e),
+                Err(e) => {
+                    eprintln!("Erreur lors de la mise à jour : {}", e);
+                }
             }
         } else {
             println!("Ping Internet: ÉCHEC (Timeout 10s)");
