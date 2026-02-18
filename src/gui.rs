@@ -92,9 +92,7 @@ impl BpmApp {
                 // Poll all available messages
                 if let Ok(rx) = self.receiver.lock() {
                     while let Ok(result) = rx.try_recv() {
-                        if let Some(bpm) = result.bpm {
-                            self.bpm = Some(bpm);
-                        }
+                        self.bpm = result.bpm;
                         self.num_peers = result.num_peers;
                     }
                 }
@@ -337,8 +335,9 @@ fn run_analysis_loop(
 
         // Periodic UI update (for peer count) if we haven't sent one recently
         if last_ui_update.elapsed() > Duration::from_millis(200) {
+            let link_bpm = link_manager.get_tempo();
             let _ = tx.send(GuiUpdate {
-                bpm: None, // Reset BPM display if no analysis
+                bpm: Some(link_bpm as f32), // Send Link BPM instead of None
                 num_peers: link_manager.num_peers(),
             });
             last_ui_update = Instant::now();
