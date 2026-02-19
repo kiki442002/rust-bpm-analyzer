@@ -8,44 +8,59 @@ pub mod display {
     use linux_embedded_hal::I2cdev;
     use ssd1306::mode::BufferedGraphicsMode;
     use ssd1306::{I2CDisplayInterface, Ssd1306, prelude::*};
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use tinybmp::Bmp;
+    use tokio::time::{Duration, sleep};
 
     mod assets {
         pub const ICON_USB: &[u8] = include_bytes!("../../assets/display_asset/USB-tiny.bmp");
-        pub const ICON_DHCP: &[u8] = include_bytes!("../../assets/display_asset/DHCP-tiny.bmp");
         pub const ICON_ETHERNET: &[u8] =
             include_bytes!("../../assets/display_asset/ethernet-tiny.bmp");
         pub const ICON_ETHERNET_INTERNET: &[u8] =
             include_bytes!("../../assets/display_asset/ethernet+internet-tiny.bmp");
         pub const ICON_UPDATE: &[u8] = include_bytes!("../../assets/display_asset/update-tiny.bmp");
+        pub const ICON_UPDATE_PIVOT: &[u8] =
+            include_bytes!("../../assets/display_asset/update-pivot-tiny.bmp");
     }
 
     /// Icônes disponibles pour la barre de statut
+    ///
     pub enum StatusBarIcon {
         Usb,
         Ethernet,
-        Dhcp,
         Internet,
         Update,
     }
 
+    #[derive(Clone, Debug, Default)]
+    pub struct AppState {
+        pub usb_connected: bool,
+        pub ethernet_connected: bool,
+        pub internet_connected: bool,
+        pub update_available: bool,
+        pub update_in_progress: bool,
+    }
+
     pub struct Icons {
         pub usb: Bmp<'static, BinaryColor>,
-        pub dhcp: Bmp<'static, BinaryColor>,
         pub ethernet: Bmp<'static, BinaryColor>,
         pub ethernet_internet: Bmp<'static, BinaryColor>,
         pub update: Bmp<'static, BinaryColor>,
+        pub update_pivot: Bmp<'static, BinaryColor>,
     }
 
     impl Icons {
         pub fn new() -> Result<Self, String> {
             Ok(Self {
                 usb: Bmp::from_slice(assets::ICON_USB).map_err(|e| format!("{:?}", e))?,
-                dhcp: Bmp::from_slice(assets::ICON_DHCP).map_err(|e| format!("{:?}", e))?,
                 ethernet: Bmp::from_slice(assets::ICON_ETHERNET).map_err(|e| format!("{:?}", e))?,
                 ethernet_internet: Bmp::from_slice(assets::ICON_ETHERNET_INTERNET)
                     .map_err(|e| format!("{:?}", e))?,
                 update: Bmp::from_slice(assets::ICON_UPDATE).map_err(|e| format!("{:?}", e))?,
+                update_pivot: Bmp::from_slice(assets::ICON_UPDATE_PIVOT)
+                    .map_err(|e| format!("{:?}", e))?,
             })
         }
     }
@@ -57,6 +72,7 @@ pub mod display {
             BufferedGraphicsMode<DisplaySize128x64>,
         >,
         icons: Icons,
+        pub state: AppState,
     }
 
     impl BpmDisplay {
@@ -88,28 +104,28 @@ pub mod display {
         ) -> Result<(), Box<dyn std::error::Error>> {
             match icon {
                 StatusBarIcon::Usb => {
+                    self.state.usb_connected = true;
                     Image::new(&self.icons.usb, Point::new(16, 8))
                         .draw(&mut self.display)
                         .map_err(|e| format!("{:?}", e))?;
                 }
                 StatusBarIcon::Ethernet => {
+                    self.state.ethernet_connected = true;
                     Image::new(&self.icons.ethernet, Point::new(48, 8))
                         .draw(&mut self.display)
                         .map_err(|e| format!("{:?}", e))?;
                 }
                 StatusBarIcon::Internet => {
+                    self.state.internet_connected = true;
+                    // Usually internet implies ethernet too
+                    self.state.ethernet_connected = true;
                     Image::new(&self.icons.ethernet_internet, Point::new(48, 8))
                         .draw(&mut self.display)
                         .map_err(|e| format!("{:?}", e))?;
                 }
                 StatusBarIcon::Update => {
+                    self.state.update_available = true;
                     Image::new(&self.icons.update, Point::new(112, 8))
-                        .draw(&mut self.display)
-                        .map_err(|e| format!("{:?}", e))?;
-                }
-
-                StatusBarIcon::Dhcp => {
-                    Image::new(&self.icons.dhcp, Point::new(80, 8))
                         .draw(&mut self.display)
                         .map_err(|e| format!("{:?}", e))?;
                 }
@@ -127,10 +143,22 @@ pub mod display {
             let size = Size::new(16, 16);
 
             let point = match icon {
-                StatusBarIcon::Usb => Point::new(16, 8),
-                StatusBarIcon::Ethernet | StatusBarIcon::Internet => Point::new(48, 8),
-                StatusBarIcon::Dhcp => Point::new(80, 8),
-                StatusBarIcon::Update => Point::new(112, 8),
+                StatusBarIcon::Usb => {
+                    self.state.usb_connected = false;
+                    Point::new(16, 8)
+                }
+                StatusBarIcon::Ethernet => {
+                    self.state.ethernet_connected = false;
+                    Point::new(48, 8)
+                }
+                StatusBarIcon::Internet => {
+                    self.state.internet_connected = false;
+                    Point::new(48, 8)
+                }
+                StatusBarIcon::Update => {
+                    self.state.update_available = false;
+                    Point::new(112, 8)
+                }
             };
 
             // Dessine un rectangle noir (Off) par dessus
@@ -175,7 +203,12 @@ pub mod display {
                 .map_err(|e| format!("Flush error: {:?}", e))?;
 
             let icons = Icons::new().map_err(|e| format!("Icon load error: {}", e))?;
-            Ok(BpmDisplay { display, icons })
+            let state = AppState::default();
+            Ok(BpmDisplay {
+                display,
+                icons,
+                state,
+            })
         }
 
         pub fn show_bpm(&mut self, bpm: f32) -> Result<(), Box<dyn std::error::Error>> {
@@ -234,6 +267,83 @@ pub mod display {
                 .flush()
                 .map_err(|e| format!("Flush error: {:?}", e))?;
             Ok(())
+        }
+
+        pub fn update_in_progress(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+            if !self.state.update_in_progress
+                && self.state.update_available
+                && self.state.internet_connected
+            {
+                self.state.update_in_progress = true;
+                self.display
+                    .clear(BinaryColor::Off)
+                    .map_err(|e| format!("Clear error: {:?}", e))?;
+                // Affichage de mise à jour en cours
+                let style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
+                Text::new("Update in Progress", Point::new(10, 30), style)
+                    .draw(&mut self.display)
+                    .map_err(|e| format!("Draw update error: {:?}", e))?;
+                self.display
+                    .flush()
+                    .map_err(|e| format!("Flush error: {:?}", e))?;
+
+                return Ok(());
+            }
+            Err("Impossible to Update".into())
+        }
+
+        // Note: Cette fonction prend un Arc<Mutex<Self>> pour pouvoir être spawnée
+        // et acquérir le lock uniquement quand nécessaire.
+        pub async fn run_update_animation(
+            display_arc: Arc<Mutex<Self>>,
+            is_running: Arc<AtomicBool>,
+        ) {
+            // Boucle tant que `is_running` est vrai
+            while is_running.load(Ordering::Relaxed) {
+                // Scope pour le lock (Frame 1)
+                {
+                    if let Ok(mut guard) = display_arc.try_lock() {
+                        // Hack: déstructurer.
+                        let BpmDisplay { display, icons, .. } = &mut *guard;
+                        let _ = Image::new(&icons.update, Point::new(56, 10)).draw(display);
+                        let _ = display.flush();
+                    }
+                }
+
+                // Pause 500 ms (en vérifiant si on doit quitter)
+                for _ in 0..5 {
+                    if !is_running.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    sleep(Duration::from_millis(100)).await;
+                }
+                if !is_running.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                // Scope pour le lock (Frame 2)
+                {
+                    if let Ok(mut guard) = display_arc.try_lock() {
+                        let BpmDisplay { display, icons, .. } = &mut *guard;
+                        let _ = Image::new(&icons.update_pivot, Point::new(56, 10)).draw(display);
+                        let _ = display.flush();
+                    }
+                }
+
+                // Pause 500 ms
+                for _ in 0..5 {
+                    if !is_running.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    sleep(Duration::from_millis(100)).await;
+                }
+            }
+
+            // Cleanup: Effacer l'icône à la fin
+            if let Ok(mut guard) = display_arc.try_lock() {
+                let _ = guard.display.clear(BinaryColor::Off);
+                let _ = guard.display.flush();
+            }
         }
     }
 }
