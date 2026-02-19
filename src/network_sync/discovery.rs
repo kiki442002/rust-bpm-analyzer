@@ -55,12 +55,19 @@ impl NetworkManager {
             }
         });
 
-        Ok(Self {
+        let manager = Self {
             socket,
             receiver: rx_in,
             device_id,
             device_name,
-        })
+        };
+
+        // Announce presence immediately
+        if let Err(e) = manager.announce_presence(true) {
+            eprintln!("Failed to announce presence: {}", e);
+        }
+
+        Ok(manager)
     }
 
     /// Sends a message to the multicast group.

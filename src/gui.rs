@@ -33,7 +33,7 @@ pub enum GuiCommand {
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let window_settings = iced::window::Settings {
-        size: iced::Size::new(350.0, 400.0),
+        size: iced::Size::new(370.0, 480.0),
         ..Default::default()
     };
 
@@ -76,7 +76,6 @@ struct BpmApp {
     network_manager: Option<NetworkManager>,
     network_energy: f32,
     remote_auto_gain: bool,
-    remote_analysis: bool,
     remote_peers: HashMap<String, String>,
 }
 
@@ -94,7 +93,6 @@ enum Message {
     CloseUpdateModal,
     UpdateCompleted(bool),
     SetRemoteAutoGain(bool),
-    SetRemoteAnalysis(bool),
 }
 
 impl BpmApp {
@@ -164,7 +162,6 @@ impl BpmApp {
                 .ok(),
                 network_energy: 0.0,
                 remote_auto_gain: false,
-                remote_analysis: false,
                 remote_peers: HashMap::new(),
             },
             Task::perform(async {}, |_| Message::CheckUpdate),
@@ -256,7 +253,7 @@ impl BpmApp {
                 if let Some(manager) = &self.network_manager {
                     while let Ok(msg) = manager.try_recv() {
                         // Avoid spamming logs for high frequency messages like EnergyLevel
-                        if !matches!(msg, NetworkMessage::EnergyLevel(_)) {
+                        if !matches!(&msg, NetworkMessage::EnergyLevel(_)) {
                             println!("Received Network Message: {:?}", msg);
                         }
 
@@ -273,9 +270,6 @@ impl BpmApp {
                             }
                             NetworkMessage::AutoGainState(state) => {
                                 self.remote_auto_gain = state;
-                            }
-                            NetworkMessage::AnalysisState(state) => {
-                                self.remote_analysis = state;
                             }
                             _ => {}
                         }
@@ -430,13 +424,6 @@ impl BpmApp {
                     println!("Sending: SetAutoGain({})", val);
                     let _ = manager.send(NetworkMessage::SetAutoGain(val));
                     self.remote_auto_gain = val;
-                }
-            }
-            Message::SetRemoteAnalysis(val) => {
-                if let Some(manager) = &self.network_manager {
-                    println!("Sending: SetAnalysis({})", val);
-                    let _ = manager.send(NetworkMessage::SetAnalysis(val));
-                    self.remote_analysis = val;
                 }
             }
         }
