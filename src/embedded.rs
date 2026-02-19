@@ -76,7 +76,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Network Sync
-    let binding = NetworkManager::new("embedded_milkv".to_string(), "Milk-V DUOs".to_string());
+    let device_id = "embedded_milkv".to_string();
+    let binding = NetworkManager::new(device_id.clone(), "Milk-V DUOs".to_string());
     if let Err(e) = &binding {
         eprintln!("Network Init Failed: {}", e);
     }
@@ -139,7 +140,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 // --- Send Energy Level ---
                 if let Some(net) = &network_manager {
                     // Send energy level to network
-                    let _ = net.send(NetworkMessage::EnergyLevel(rms));
+                    let _ = net.send(NetworkMessage::EnergyLevel {
+                        id: device_id.clone(),
+                        level: rms,
+                    });
                 }
 
                 // --- Update Local Display ---

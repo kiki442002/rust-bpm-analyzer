@@ -76,7 +76,8 @@ struct BpmApp {
     network_manager: Option<NetworkManager>,
     network_energy: f32,
     remote_auto_gain: bool,
-    remote_peers: HashMap<String, String>,
+    remote_peers: HashMap<String, (String, Instant)>,
+    // last_discovery_msg: Instant, // Removed as we use EnergyLevel for presence
 }
 
 #[derive(Debug, Clone)]
@@ -163,6 +164,7 @@ impl BpmApp {
                 network_energy: 0.0,
                 remote_auto_gain: false,
                 remote_peers: HashMap::new(),
+                // last_discovery_msg: Instant::now(),
             },
             Task::perform(async {}, |_| Message::CheckUpdate),
         )
@@ -252,28 +254,63 @@ impl BpmApp {
                 // Poll network messages
                 if let Some(manager) = &self.network_manager {
                     while let Ok(msg) = manager.try_recv() {
-                        // Avoid spamming logs for high frequency messages like EnergyLevel
-                        if !matches!(&msg, NetworkMessage::EnergyLevel(_)) {
+                        // Avoid spamming logs for high frequency messages like EnergyLevel and Discovery
+                        if !matches!(
+                            &msg,
+                            NetworkMessage::EnergyLevel { .. } | NetworkMessage::Discovery
+                        ) {
                             println!("Received Network Message: {:?}", msg);
                         }
 
                         match msg {
                             NetworkMessage::Presence { id, name, online } => {
                                 if online {
-                                    self.remote_peers.insert(id, name);
+                                    self.remote_peers.insert(id, (name, Instant::now()));
                                 } else {
                                     self.remote_peers.remove(&id);
                                 }
                             }
-                            NetworkMessage::EnergyLevel(level) => {
+                            NetworkMessage::EnergyLevel { id, level } => {
+                                // Update presence for this peer
+                                if let Some((_, last_seen)) = self.remote_peers.get_mut(&id) {
+                                    *last_seen = Instant::now();
+                                } else {
+                                    // If we receive energy from an unknown peer, we add it with a default name or just wait for Presence?
+                                    // The user said "use energy as heartbeat". If we haven't seen Presence yet, we might not know the name.
+                                    // But typically Presence is sent on start. If we miss it and only get Energy, we should probably add it.
+                                    // However, without a name, it's tricky. Let's try to keep it simple: if known, update time.
+                                    // Actually, if we miss the Presence packet (UDP), we might never see the peer.
+                                    // Maybe we should auto-add if missing? But with what name?
+                                    // Let's stick to updating existing peers for now. The device sends Presence on startup anyway.
+                                    // Wait, if we stop sending Discovery, how does the desktop know about the device if the desktop starts AFTER the device?
+                                    // The device needs to send Presence periodically or respond to *something*.
+                                    // BUT the user said "remove Discovery msg there are too many".
+                                    // If I remove Discovery from Desktop, the Embedded device needs to send Presence or Energy periodically.
+                                    // Embedded ALREADY sends Energy periodically.
+                                    // So if Desktop starts late, it will receive Energy.
+                                    // If I don't add the peer on Energy, the Desktop won't show it until it restarts or sends Presence.
+                                    // Maybe I should add it with a placeholder name like "Unknown Device"?
+                                    self.remote_peers
+                                        .entry(id.clone())
+                                        .and_modify(|(_, last_seen)| *last_seen = Instant::now())
+                                        .or_insert(("Unknown Device".to_string(), Instant::now()));
+                                }
                                 self.network_energy = level;
                             }
                             NetworkMessage::AutoGainState(state) => {
                                 self.remote_auto_gain = state;
+                                // If we receive status updates, perhaps update all peers as alive?
+                                // Safer to stick to Presence.
                             }
                             _ => {}
                         }
                     }
+
+                    // Check for timeouts (1000ms) and remove peers
+                    let now = Instant::now();
+                    self.remote_peers.retain(|_, (_, last_seen)| {
+                        now.duration_since(*last_seen) < Duration::from_millis(1000)
+                    });
                 }
 
                 // Poll all available messages
@@ -517,14 +554,16 @@ impl BpmApp {
 
         let peers_text = if self.is_enabled {
             text(format!(
-                "Ableton Link Peers: {} | Remote Devices: {}",
-                self.num_peers,
-                self.remote_peers.len()
+                "Remote Devices: {} | Ableton Link Peers: {} ",
+                self.remote_peers.len(),
+                self.num_peers
             ))
             .size(14)
             .color([0.7, 0.7, 0.7])
         } else {
-            text("").size(14).color([0.5, 0.5, 0.5])
+            text(format!("Remote Devices: {}", self.remote_peers.len()))
+                .size(14)
+                .color([0.7, 0.7, 0.7])
         };
 
         let bpm_display = if !self.is_enabled {
