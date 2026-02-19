@@ -19,6 +19,7 @@ aubio = { version = "0.2", features = ["bindgen", "static", "builtin"] }
 
 
 
+
 # Embedded Linux specific dependencies (Milk-V Duo, Raspberry Pi)
 [target.aarch64-unknown-linux-gnu.dependencies]
 alsa = "0.9.0"
@@ -40,6 +41,7 @@ futures = "0.3.31"
 [target.'cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))'.dependencies]
 iced = "0.13"
 image = "0.24" # To load the window icon
+midir = "0.10.3"
 
 
 

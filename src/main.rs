@@ -4,6 +4,9 @@ mod core_bpm;
 mod core_embedded;
 mod network_sync;
 
+#[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]
+pub mod midi;
+
 #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
 mod embedded;
 #[cfg(not(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux")))]

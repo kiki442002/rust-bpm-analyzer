@@ -50,6 +50,11 @@ impl LinkManager {
         self.link.commit_app_session_state(&self.session_state);
     }
 
+    pub fn get_tempo(&mut self) -> f64 {
+        self.link.capture_app_session_state(&mut self.session_state);
+        self.session_state.tempo()
+    }
+
     pub fn link_state(&mut self, enable: bool) {
         self.link.enable(enable);
     }
