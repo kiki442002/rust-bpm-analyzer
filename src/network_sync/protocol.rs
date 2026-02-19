@@ -25,7 +25,7 @@ pub enum NetworkMessage {
     /// Instant energy level update (0.0 to 1.0)
     /// Sent by Embedded -> Desktop
     /// High frequency, no feedback required.
-    EnergyLevel(f32),
+    EnergyLevel { id: String, level: f32 },
 
     /// Command to enable/disable Auto-Gain
     /// Can be sent by Desktop -> Embedded
