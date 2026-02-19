@@ -2,7 +2,7 @@ use crate::core_bpm::{AudioCapture, AudioMessage, AudioPID, BpmAnalyzer};
 use crate::core_embedded::display::display::BpmDisplay;
 use crate::core_embedded::led::led::Led;
 use crate::core_embedded::network::network;
-use crate::network_sync::LinkManager;
+use crate::network_sync::{LinkManager, NetworkManager, NetworkMessage};
 use crate::platform::TARGET_SAMPLE_RATE;
 use alsa::Mixer;
 use std::sync::mpsc;
@@ -72,35 +72,88 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         None,
         TARGET_SAMPLE_RATE,
         None,
-        Some(Duration::from_millis(500)), // 500ms de données par paquet
+        Some(Duration::from_millis(100)), // Réduire à 100ms
     )?;
+
+    // Network Sync
+    let binding = NetworkManager::new("embedded_milkv".to_string(), "Milk-V DUOs".to_string());
+    if let Err(e) = &binding {
+        eprintln!("Network Init Failed: {}", e);
+    }
+    let network_manager = binding.ok();
+
+    let mut auto_gain_enabled = true; // Enabled by default
+    let mut analysis_enabled = true; // Enabled by default
 
     println!("Audio capture started. Listening... (Press Ctrl+C to stop)");
 
     for msg in receiver {
+        // --- Poll Network Messages ---
+        if let Some(net) = &network_manager {
+            while let Ok(cmd) = net.try_recv() {
+                match cmd {
+                    NetworkMessage::SetAutoGain(val) => {
+                        println!("Network: SetAutoGain {}", val);
+                        auto_gain_enabled = val;
+                        let _ = net.announce_presence(true); // Should send current state too
+                        let _ = net.send(NetworkMessage::AutoGainState(val));
+                    }
+                    NetworkMessage::SetAnalysis(val) => {
+                        println!("Network: SetAnalysis {}", val);
+                        analysis_enabled = val;
+                        let _ = net.send(NetworkMessage::AnalysisState(val));
+                    }
+                    NetworkMessage::Discovery => {
+                        let _ = net.announce_presence(true);
+                        let _ = net.send(NetworkMessage::AutoGainState(auto_gain_enabled));
+                        let _ = net.send(NetworkMessage::AnalysisState(analysis_enabled));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         if stop_flag.load(Ordering::SeqCst) {
             println!("Arrêt demandé, sortie de la boucle.");
+            if let Some(net) = &network_manager {
+                let _ = net.announce_presence(false);
+            }
             break;
         }
         match msg {
             AudioMessage::Samples(packet) => {
                 new_samples_accumulator.extend(&packet);
-                match pid.update_alsa_from_slice(setpoint, &packet, &mixer) {
-                    Ok((_, rms)) => {
-                        //println!("PID output gain: {}", gain);
-                        if let Some(display_mutex) = &bpm_display {
-                            // On tente de verrouiller le mutex sans bloquer l'audio
-                            if let Ok(mut guard) = display_mutex.try_lock() {
-                                let _ = guard.update_audio_bar(rms);
-                            }
-                        }
+
+                // --- Calculate RMS / AutoGain ---
+                let mut rms = 0.0;
+                if auto_gain_enabled {
+                    match pid.update_alsa_from_slice(setpoint, &packet, &mixer) {
+                        Ok((_, val)) => rms = val,
+                        Err(e) => eprintln!("PID update error: {}", e),
                     }
-                    Err(e) => {
-                        eprintln!("PID update error: {}", e);
+                } else {
+                    // Just calculate RMS without adjusting volume
+                    rms = (packet.iter().map(|x| x * x).sum::<f32>() / packet.len() as f32).sqrt();
+                }
+
+                // --- Send Energy Level ---
+                if let Some(net) = &network_manager {
+                    // Send energy level to network
+                    let _ = net.send(NetworkMessage::EnergyLevel(rms));
+                }
+
+                // --- Update Local Display ---
+                if let Some(display_mutex) = &bpm_display {
+                    // On tente de verrouiller le mutex sans bloquer l'audio
+                    if let Ok(mut guard) = display_mutex.try_lock() {
+                        let _ = guard.update_audio_bar(rms);
                     }
                 }
 
-                if new_samples_accumulator.len() >= current_hop_size {
+                // Check analysis enabled
+                if !analysis_enabled {
+                    new_samples_accumulator.clear();
+                } else if new_samples_accumulator.len() >= current_hop_size {
                     if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
                         println!(
                             "BPM: {:.1} | Drop: {} | Conf: {:.2} | CoarseConf: {:.2}",
