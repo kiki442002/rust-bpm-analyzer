@@ -1,13 +1,14 @@
 use iced::alignment::Horizontal;
-use iced::widget::{button, column, container, pick_list, row, text};
+use iced::widget::{button, column, container, pick_list, progress_bar, row, text};
 use iced::{Color, Element, Length, Subscription, Task, Theme};
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::core_bpm::{AudioCapture, AudioMessage, BpmAnalyzer};
 use crate::midi::{MidiEvent, MidiManager};
-use crate::network_sync::LinkManager;
+use crate::network_sync::{LinkManager, NetworkManager, NetworkMessage};
 use crate::platform::TARGET_SAMPLE_RATE;
 
 #[derive(Debug, Clone)]
@@ -63,6 +64,20 @@ struct BpmApp {
     midi_manager: Option<std::sync::Arc<std::sync::Mutex<MidiManager>>>,
     midi_learn: bool,
     tap_midi_mapping: Option<MidiMapping>,
+    available_midi_devices: Vec<String>,
+    selected_midi_device: Option<String>,
+
+    // Update
+    update_available: Option<String>,
+    show_update_modal: bool,
+    is_updating: bool,
+
+    // Network
+    network_manager: Option<NetworkManager>,
+    network_energy: f32,
+    remote_auto_gain: bool,
+    remote_analysis: bool,
+    remote_peers: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +87,14 @@ enum Message {
     DeviceSelected(String),
     Tap,
     ToggleMidiLearn,
+    MidiDeviceSelected(String),
+    CheckUpdate,
+    UpdateFound(Option<String>),
+    StartUpdate,
+    CloseUpdateModal,
+    UpdateCompleted(bool),
+    SetRemoteAutoGain(bool),
+    SetRemoteAnalysis(bool),
 }
 
 impl BpmApp {
@@ -92,9 +115,28 @@ impl BpmApp {
         });
 
         // Initialize MIDI Manager
+        let (inputs, outputs) = MidiManager::list_ports().unwrap_or_default();
+        let mut available_midi_devices = inputs.clone();
+        for out in outputs {
+            if !available_midi_devices.contains(&out) {
+                available_midi_devices.push(out);
+            }
+        }
+        available_midi_devices.sort();
+        let selected_midi_device = available_midi_devices.first().cloned();
+
         let midi_manager = MidiManager::new()
             .ok()
             .map(|m| std::sync::Arc::new(std::sync::Mutex::new(m)));
+
+        if let Some(manager_mutex) = &midi_manager {
+            if let Ok(mut manager) = manager_mutex.lock() {
+                if let Some(port) = &selected_midi_device {
+                    let _ = manager.select_input(port);
+                    let _ = manager.select_output(port);
+                }
+            }
+        }
 
         (
             Self {
@@ -109,14 +151,137 @@ impl BpmApp {
                 midi_manager,
                 midi_learn: false,
                 tap_midi_mapping: None,
+                available_midi_devices,
+                selected_midi_device,
+                update_available: None,
+                show_update_modal: false,
+                is_updating: false,
+                network_manager: NetworkManager::new(
+                    "desktop_gui".to_string(),
+                    "Desktop".to_string(),
+                )
+                .map_err(|e| eprintln!("Net error: {}", e))
+                .ok(),
+                network_energy: 0.0,
+                remote_auto_gain: false,
+                remote_analysis: false,
+                remote_peers: HashMap::new(),
             },
-            Task::none(),
+            Task::perform(async {}, |_| Message::CheckUpdate),
         )
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::MidiDeviceSelected(port_name) => {
+                self.selected_midi_device = Some(port_name.clone());
+                if let Some(manager) = &self.midi_manager {
+                    if let Ok(mut m) = manager.lock() {
+                        let _ = m.select_input(&port_name);
+                        let _ = m.select_output(&port_name);
+                    }
+                }
+                return Task::none();
+            }
+            Message::CheckUpdate => {
+                return Task::perform(
+                    async {
+                        let status = self_update::backends::github::ReleaseList::configure()
+                            .repo_owner("kiki442002")
+                            .repo_name("rust-bpm-analyzer")
+                            .build()
+                            .unwrap()
+                            .fetch();
+
+                        if let Ok(releases) = status {
+                            if let Some(release) = releases.first() {
+                                let current_version = env!("CARGO_PKG_VERSION");
+                                if release.version != current_version {
+                                    return Some(release.version.clone());
+                                }
+                            }
+                        }
+                        None
+                    },
+                    Message::UpdateFound,
+                );
+            }
+            Message::UpdateFound(version) => {
+                if let Some(v) = version {
+                    self.update_available = Some(v);
+                    self.show_update_modal = true;
+                }
+                return Task::none();
+            }
+            Message::StartUpdate => {
+                self.is_updating = true;
+                return Task::perform(
+                    async {
+                        let status = self_update::backends::github::Update::configure()
+                            .repo_owner("kiki442002")
+                            .repo_name("rust-bpm-analyzer")
+                            .bin_name("rust-bpm-analyzer")
+                            .show_download_progress(true)
+                            .no_confirm(true)
+                            .current_version(env!("CARGO_PKG_VERSION"))
+                            .build()
+                            .unwrap()
+                            .update();
+
+                        status.is_ok()
+                    },
+                    Message::UpdateCompleted,
+                );
+            }
+            Message::UpdateCompleted(success) => {
+                self.is_updating = false;
+                self.show_update_modal = false;
+                if success {
+                    println!("Update successful, restarting...");
+                    if let Ok(exe) = std::env::current_exe() {
+                        let _ = std::process::Command::new(exe).spawn();
+                        std::process::exit(0);
+                    }
+                } else {
+                    println!("Update failed.");
+                }
+                return Task::none();
+            }
+            Message::CloseUpdateModal => {
+                self.show_update_modal = false;
+                return Task::none();
+            }
             Message::Tick => {
+                // Poll network messages
+                if let Some(manager) = &self.network_manager {
+                    while let Ok(msg) = manager.try_recv() {
+                        // Avoid spamming logs for high frequency messages like EnergyLevel
+                        if !matches!(msg, NetworkMessage::EnergyLevel(_)) {
+                            println!("Received Network Message: {:?}", msg);
+                        }
+
+                        match msg {
+                            NetworkMessage::Presence { id, name, online } => {
+                                if online {
+                                    self.remote_peers.insert(id, name);
+                                } else {
+                                    self.remote_peers.remove(&id);
+                                }
+                            }
+                            NetworkMessage::EnergyLevel(level) => {
+                                self.network_energy = level;
+                            }
+                            NetworkMessage::AutoGainState(state) => {
+                                self.remote_auto_gain = state;
+                            }
+                            NetworkMessage::AnalysisState(state) => {
+                                self.remote_analysis = state;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
                 // Poll all available messages
                 if let Ok(rx) = self.receiver.lock() {
                     while let Ok(result) = rx.try_recv() {
@@ -260,15 +425,117 @@ impl BpmApp {
                 self.input_device = Some(device_name.clone());
                 let _ = self.sender.send(GuiCommand::SetDevice(Some(device_name)));
             }
+            Message::SetRemoteAutoGain(val) => {
+                if let Some(manager) = &self.network_manager {
+                    println!("Sending: SetAutoGain({})", val);
+                    let _ = manager.send(NetworkMessage::SetAutoGain(val));
+                    self.remote_auto_gain = val;
+                }
+            }
+            Message::SetRemoteAnalysis(val) => {
+                if let Some(manager) = &self.network_manager {
+                    println!("Sending: SetAnalysis({})", val);
+                    let _ = manager.send(NetworkMessage::SetAnalysis(val));
+                    self.remote_analysis = val;
+                }
+            }
         }
         Task::none()
     }
 
     fn view(&self) -> Element<'_, Message> {
+        if self.show_update_modal {
+            return container(
+                column![
+                    text("New Update Available!").size(24),
+                    text(format!(
+                        "Version {} is available.",
+                        self.update_available.as_deref().unwrap_or("?")
+                    ))
+                    .size(18),
+                    if self.is_updating {
+                        text("Updating...").size(16)
+                    } else {
+                        text("Do you want to update now?").size(16)
+                    },
+                    if !self.is_updating {
+                        row![
+                            button(text("Update Now").align_x(Horizontal::Center))
+                                .on_press(Message::StartUpdate)
+                                .padding(10)
+                                .style(|theme: &'_ Theme, status| {
+                                    let palette = theme.palette();
+                                    let base = Color {
+                                        a: 0.9,
+                                        ..palette.success
+                                    };
+
+                                    let background = match status {
+                                        button::Status::Active => base,
+                                        button::Status::Hovered => Color { a: 0.75, ..base },
+                                        button::Status::Pressed => Color { a: 0.6, ..base },
+                                        button::Status::Disabled => Color::from_rgb(0.4, 0.4, 0.4),
+                                    };
+
+                                    button::Style {
+                                        background: Some(background.into()),
+                                        text_color: Color::WHITE,
+                                        border: iced::Border {
+                                            radius: 15.0.into(),
+                                            ..iced::Border::default()
+                                        },
+                                        ..button::Style::default()
+                                    }
+                                }),
+                            button(text("Cancel").align_x(Horizontal::Center))
+                                .on_press(Message::CloseUpdateModal)
+                                .padding(10)
+                                .style(|theme: &'_ Theme, status| {
+                                    let palette = theme.palette();
+                                    let base = Color {
+                                        a: 0.9,
+                                        ..palette.danger
+                                    };
+
+                                    let background = match status {
+                                        button::Status::Active => base,
+                                        button::Status::Hovered => Color { a: 0.75, ..base },
+                                        button::Status::Pressed => Color { a: 0.6, ..base },
+                                        button::Status::Disabled => Color::from_rgb(0.4, 0.4, 0.4),
+                                    };
+
+                                    button::Style {
+                                        background: Some(background.into()),
+                                        text_color: Color::WHITE,
+                                        border: iced::Border {
+                                            radius: 15.0.into(),
+                                            ..iced::Border::default()
+                                        },
+                                        ..button::Style::default()
+                                    }
+                                })
+                        ]
+                        .spacing(20)
+                    } else {
+                        row![].into()
+                    }
+                ]
+                .spacing(20)
+                .align_x(Horizontal::Center),
+            )
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .into();
+        }
+
         let peers_text = if self.is_enabled {
-            text(format!("Link Peers: {}", self.num_peers))
-                .size(14)
-                .color([0.7, 0.7, 0.7])
+            text(format!(
+                "Ableton Link Peers: {} | Remote Devices: {}",
+                self.num_peers,
+                self.remote_peers.len()
+            ))
+            .size(14)
+            .color([0.7, 0.7, 0.7])
         } else {
             text("").size(14).color([0.5, 0.5, 0.5])
         };
@@ -404,9 +671,85 @@ impl BpmApp {
                 }
             });
 
-        let tap_row = row![tap_btn, learn_btn]
+        let midi_picker = pick_list(
+            self.available_midi_devices.clone(),
+            self.selected_midi_device.clone(),
+            Message::MidiDeviceSelected,
+        )
+        .placeholder("Select MIDI Device")
+        .text_size(10)
+        .width(Length::Fill);
+
+        let tap_row = row![tap_btn, learn_btn, midi_picker]
             .spacing(10)
             .align_y(iced::alignment::Vertical::Center);
+
+        let has_peers = !self.remote_peers.is_empty();
+
+        let mut auto_gain_btn = button(
+            text(if self.remote_auto_gain {
+                "Auto Gain: ON"
+            } else {
+                "Auto Gain: OFF"
+            })
+            .size(10)
+            .align_x(Horizontal::Center),
+        )
+        .padding(8)
+        .style(move |theme: &'_ Theme, status| {
+            let palette = theme.palette();
+            let base = if self.remote_auto_gain {
+                palette.success
+            } else {
+                palette.background
+            };
+
+            let background = match status {
+                button::Status::Active => base,
+                button::Status::Hovered => Color { a: 0.8, ..base },
+                button::Status::Pressed => Color { a: 0.6, ..base },
+                button::Status::Disabled => Color::from_rgb(0.3, 0.3, 0.3),
+            };
+
+            button::Style {
+                background: Some(background.into()),
+                text_color: if self.remote_auto_gain {
+                    Color::WHITE
+                } else {
+                    palette.text
+                },
+                border: iced::Border {
+                    radius: 15.0.into(),
+                    width: 1.0,
+                    color: if self.remote_auto_gain {
+                        Color::TRANSPARENT
+                    } else {
+                        palette.text
+                    },
+                    ..iced::Border::default()
+                },
+                ..button::Style::default()
+            }
+        });
+
+        if has_peers {
+            auto_gain_btn =
+                auto_gain_btn.on_press(Message::SetRemoteAutoGain(!self.remote_auto_gain));
+        }
+
+        let remote_controls = column![
+            text("Remote Energy In").size(12).color([0.7, 0.7, 0.7]),
+            row![
+                progress_bar(0.0..=0.5, self.network_energy)
+                    .height(20)
+                    .width(Length::Fill),
+                auto_gain_btn
+            ]
+            .spacing(10)
+            .align_y(iced::alignment::Vertical::Center)
+        ]
+        .spacing(5)
+        .align_x(Horizontal::Center);
 
         container(
             column![
@@ -418,7 +761,8 @@ impl BpmApp {
                     .spacing(5),
                 tap_row,
                 device_picker,
-                toggle_btn
+                toggle_btn,
+                remote_controls
             ]
             .align_x(Horizontal::Center)
             .spacing(20)

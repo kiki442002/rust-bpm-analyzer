@@ -21,25 +21,67 @@ pub struct MidiManager {
     _in_conn: Option<MidiInputConnection<()>>,
     out_conn: Option<MidiOutputConnection>,
     receiver: mpsc::Receiver<MidiEvent>,
+    sender: mpsc::Sender<MidiEvent>,
 }
 
 impl MidiManager {
     pub fn new() -> Result<Self, Box<dyn Error>> {
         let (tx, rx) = mpsc::channel();
+        let mut manager = Self {
+            _in_conn: None,
+            out_conn: None,
+            receiver: rx,
+            sender: tx,
+        };
 
-        // --- INPUT ---
+        // Try to connect to first available ports
+        if let Ok((inputs, outputs)) = Self::list_ports() {
+            if let Some(in_name) = inputs.first() {
+                let _ = manager.select_input(in_name);
+            }
+            if let Some(out_name) = outputs.first() {
+                let _ = manager.select_output(out_name);
+            }
+        }
+
+        Ok(manager)
+    }
+
+    pub fn list_ports() -> Result<(Vec<String>, Vec<String>), Box<dyn Error>> {
+        let midi_in = MidiInput::new("Rust BPM Analyzer List Input")?;
+        let midi_out = MidiOutput::new("Rust BPM Analyzer List Output")?;
+
+        let in_ports = midi_in
+            .ports()
+            .iter()
+            .filter_map(|p| midi_in.port_name(p).ok())
+            .collect();
+        let out_ports = midi_out
+            .ports()
+            .iter()
+            .filter_map(|p| midi_out.port_name(p).ok())
+            .collect();
+
+        Ok((in_ports, out_ports))
+    }
+
+    pub fn select_input(&mut self, port_name: &str) -> Result<(), Box<dyn Error>> {
+        // Disconnect current input
+        self._in_conn = None;
+
         let mut midi_in = MidiInput::new("Rust BPM Analyzer Input")?;
         midi_in.ignore(Ignore::None);
 
-        let in_ports = midi_in.ports();
-        let _in_conn = if let Some(in_port) = in_ports.first() {
-            println!(
-                "Opening connection to MIDI Input port: {}",
-                midi_in.port_name(in_port)?
-            );
+        let ports = midi_in.ports();
+        let port = ports
+            .iter()
+            .find(|p| midi_in.port_name(p).unwrap_or_default() == port_name);
 
+        if let Some(p) = port {
+            println!("Opening connection to MIDI Input port: {}", port_name);
+            let tx = self.sender.clone();
             let conn = midi_in.connect(
-                in_port,
+                p,
                 "midir-read-input",
                 move |_stamp, message, _| {
                     if message.len() >= 3 {
@@ -71,36 +113,33 @@ impl MidiManager {
                 },
                 (),
             )?;
-
-            Some(conn)
+            self._in_conn = Some(conn);
         } else {
-            None
-        };
+            println!("MIDI Input port not found: {}", port_name);
+        }
+        Ok(())
+    }
 
-        // --- OUTPUT ---
+    pub fn select_output(&mut self, port_name: &str) -> Result<(), Box<dyn Error>> {
+        // Disconnect current output
+        self.out_conn = None;
+
         let midi_out = MidiOutput::new("Rust BPM Analyzer Output")?;
-        let out_ports = midi_out.ports();
-        let out_conn = if let Some(out_port) = out_ports.first() {
-            println!(
-                "Opening connection to MIDI Output port: {}",
-                midi_out.port_name(out_port)?
-            );
-            match midi_out.connect(out_port, "midir-write-output") {
-                Ok(c) => Some(c),
-                Err(e) => {
-                    eprintln!("Failed to connect MIDI output: {}", e);
-                    None
-                }
+        let ports = midi_out.ports();
+        let port = ports
+            .iter()
+            .find(|p| midi_out.port_name(p).unwrap_or_default() == port_name);
+
+        if let Some(p) = port {
+            println!("Opening connection to MIDI Output port: {}", port_name);
+            match midi_out.connect(p, "midir-write-output") {
+                Ok(c) => self.out_conn = Some(c),
+                Err(e) => eprintln!("Failed to connect MIDI output: {}", e),
             }
         } else {
-            None
-        };
-
-        Ok(Self {
-            _in_conn,
-            out_conn,
-            receiver: rx,
-        })
+            println!("MIDI Output port not found: {}", port_name);
+        }
+        Ok(())
     }
 
     pub fn try_recv(&self) -> Result<MidiEvent, mpsc::TryRecvError> {
