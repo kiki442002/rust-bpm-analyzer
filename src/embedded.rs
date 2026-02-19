@@ -91,6 +91,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // --- Poll Network Messages ---
         if let Some(net) = &network_manager {
             while let Ok(cmd) = net.try_recv() {
+                if !matches!(cmd, NetworkMessage::EnergyLevel(_)) {
+                    println!("Network Message Received: {:?}", cmd);
+                }
                 match cmd {
                     NetworkMessage::SetAutoGain(val) => {
                         println!("Network: SetAutoGain {}", val);
