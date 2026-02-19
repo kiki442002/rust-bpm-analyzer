@@ -26,7 +26,10 @@ struct MidiMapping {
 
 #[derive(Debug, Clone)]
 pub enum GuiCommand {
+    /// Enable/Disable local audio capture AND Link
     SetDetection(bool),
+    /// Only Enable/Disable Link (keep audio capture off)
+    SetLinkOnly(bool),
     SetDevice(Option<String>),
     SetBpm(f64),
 }
@@ -77,7 +80,7 @@ struct BpmApp {
     network_energy: f32,
     remote_auto_gain: bool,
     remote_peers: HashMap<String, (String, Instant)>,
-    // last_discovery_msg: Instant, // Removed as we use EnergyLevel for presence
+    last_network_scan: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -164,7 +167,7 @@ impl BpmApp {
                 network_energy: 0.0,
                 remote_auto_gain: false,
                 remote_peers: HashMap::new(),
-                // last_discovery_msg: Instant::now(),
+                last_network_scan: Instant::now(),
             },
             Task::perform(async {}, |_| Message::CheckUpdate),
         )
@@ -252,7 +255,13 @@ impl BpmApp {
             }
             Message::Tick => {
                 // Poll network messages
-                if let Some(manager) = &self.network_manager {
+                if let Some(manager) = &mut self.network_manager {
+                    // Check for new interfaces every 2 seconds
+                    if self.last_network_scan.elapsed() >= Duration::from_secs(2) {
+                        manager.check_for_new_interfaces();
+                        self.last_network_scan = Instant::now();
+                    }
+
                     while let Ok(msg) = manager.try_recv() {
                         // Avoid spamming logs for high frequency messages like EnergyLevel and Discovery
                         if !matches!(
@@ -308,9 +317,25 @@ impl BpmApp {
 
                     // Check for timeouts (1000ms) and remove peers
                     let now = Instant::now();
+                    let had_peers = !self.remote_peers.is_empty();
+
                     self.remote_peers.retain(|_, (_, last_seen)| {
                         now.duration_since(*last_seen) < Duration::from_millis(1000)
                     });
+
+                    // Detection auto-disable if all peers are lost
+                    if had_peers && self.remote_peers.is_empty() {
+                        println!("Remote device disconnected. Disabling detection.");
+                        self.network_energy = 0.0;
+                        // If we were enabled (Remote Analysis mode), we disable everything
+                        if self.is_enabled {
+                            self.is_enabled = false;
+                            let _ = self.sender.send(GuiCommand::SetLinkOnly(false));
+                            // Also ensure detection is off
+                            let _ = self.sender.send(GuiCommand::SetDetection(false));
+                            self.bpm = None;
+                        }
+                    }
                 }
 
                 // Poll all available messages
@@ -450,7 +475,25 @@ impl BpmApp {
                     "Detection toggled: {}",
                     if self.is_enabled { "ON" } else { "OFF" }
                 );
-                let _ = self.sender.send(GuiCommand::SetDetection(self.is_enabled));
+
+                // Check if we have remote peers
+                let has_peers = !self.remote_peers.is_empty();
+
+                // If remote peers are connected, send command to them
+                if has_peers {
+                    if let Some(manager) = &self.network_manager {
+                        println!("Sending SetAnalysis({}) to remote peers", self.is_enabled);
+                        let _ = manager.send(NetworkMessage::SetAnalysis(self.is_enabled));
+                    }
+
+                    // If peers are present, we DISABLE default local detection to avoid recording from mic
+                    // BUT we enable LinkManager so we can sync/display the BPM.
+                    // New command: SetLinkOnly(true/false)
+                    let _ = self.sender.send(GuiCommand::SetLinkOnly(self.is_enabled));
+                } else {
+                    // Normal local behavior
+                    let _ = self.sender.send(GuiCommand::SetDetection(self.is_enabled));
+                }
             }
             Message::DeviceSelected(device_name) => {
                 self.input_device = Some(device_name.clone());
@@ -575,20 +618,39 @@ impl BpmApp {
         };
 
         let label_text = text("BPM").size(20).color([0.6, 0.6, 0.6]);
+        let has_peers = !self.remote_peers.is_empty();
 
-        let device_picker = pick_list(
-            self.available_devices.clone(),
-            self.input_device.clone(),
-            Message::DeviceSelected,
-        )
-        .placeholder("Select Audio Device")
-        .width(Length::Fill);
+        let device_picker = if has_peers {
+            pick_list(
+                vec![],
+                Some("Remote Audio Active".to_string()),
+                Message::DeviceSelected,
+            )
+            .placeholder("Remote Audio Active")
+            .width(Length::Fill)
+        } else {
+            pick_list(
+                self.available_devices.clone(),
+                self.input_device.clone(),
+                Message::DeviceSelected,
+            )
+            .placeholder("Select Audio Device")
+            .width(Length::Fill)
+        };
 
         let toggle_btn = button(
-            text(if self.is_enabled {
-                "Disable Detection"
+            text(if has_peers {
+                if self.is_enabled {
+                    "Stop Remote Analysis"
+                } else {
+                    "Start Remote Analysis"
+                }
             } else {
-                "Enable Detection"
+                if self.is_enabled {
+                    "Disable Detection"
+                } else {
+                    "Enable Detection"
+                }
             })
             .size(18)
             .width(Length::Fill)
@@ -709,8 +771,6 @@ impl BpmApp {
         let tap_row = row![tap_btn, learn_btn, midi_picker]
             .spacing(10)
             .align_y(iced::alignment::Vertical::Center);
-
-        let has_peers = !self.remote_peers.is_empty();
 
         let mut auto_gain_btn = button(
             text(if self.remote_auto_gain {
@@ -857,6 +917,17 @@ fn run_analysis_loop(
                         new_samples_accumulator.clear();
                         bpm_history.clear();
                     }
+                }
+                GuiCommand::SetLinkOnly(enabled) => {
+                    println!("SetLinkOnly: {}", enabled);
+                    link_manager.link_state(enabled);
+                    // Force disable local audio capture
+                    is_enabled = false;
+                    if audio_capture.is_some() {
+                        println!("Stopping audio capture (Link Only Mode)...");
+                        audio_capture = None;
+                    }
+                    new_samples_accumulator.clear();
                 }
                 GuiCommand::SetDevice(device_name) => {
                     println!("Switching device to: {:?}", device_name);

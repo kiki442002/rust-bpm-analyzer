@@ -2,6 +2,7 @@ use super::protocol::{MULTICAST_ADDR, MULTICAST_PORT, NetworkMessage};
 use if_addrs::get_if_addrs;
 use serde_json;
 use socket2::{Domain, Protocol, Socket, Type};
+use std::collections::HashSet;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4, UdpSocket};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -15,6 +16,8 @@ pub struct NetworkManager {
     device_name: String,
     // Keep a list of sockets for sending messages to all interfaces
     send_sockets: Vec<UdpSocket>,
+    // Track known interfaces to avoid rebinding
+    known_interfaces: HashSet<IpAddr>,
 }
 
 impl NetworkManager {
@@ -78,6 +81,7 @@ impl NetworkManager {
 
         // Create sockets for sending on each interface
         let mut send_sockets = Vec::new();
+        let mut known_interfaces = HashSet::new();
 
         // One standard socket for default route
         if let Ok(s) = UdpSocket::bind("0.0.0.0:0") {
@@ -92,6 +96,7 @@ impl NetworkManager {
             for iface in interfaces {
                 if !iface.is_loopback() {
                     if let IpAddr::V4(ipv4) = iface.addr.ip() {
+                        known_interfaces.insert(iface.addr.ip());
                         if let Ok(s) = UdpSocket::bind(SocketAddrV4::new(ipv4, 0)) {
                             if let Err(e) = s.set_multicast_loop_v4(true) {
                                 eprintln!("Failed to set multicast loop v4 on {:?}: {}", ipv4, e);
@@ -112,6 +117,7 @@ impl NetworkManager {
             device_id,
             device_name,
             send_sockets,
+            known_interfaces,
         };
 
         // Announce presence immediately
@@ -147,5 +153,69 @@ impl NetworkManager {
             name: self.device_name.clone(),
             online,
         })
+    }
+
+    pub fn check_for_new_interfaces(&mut self) {
+        if let Ok(interfaces) = get_if_addrs() {
+            let multi_addr: Ipv4Addr = MULTICAST_ADDR
+                .parse()
+                .unwrap_or(Ipv4Addr::new(239, 255, 42, 42));
+
+            // 1. Identify currently active interfaces
+            let mut current_interfaces = HashSet::new();
+            for iface in &interfaces {
+                if !iface.is_loopback() {
+                    if let IpAddr::V4(ipv4) = iface.addr.ip() {
+                        current_interfaces.insert(iface.addr.ip());
+                    }
+                }
+            }
+
+            // 2. Remove interfaces that are no longer present
+            self.known_interfaces
+                .retain(|ip| current_interfaces.contains(ip));
+
+            // Note: We might want to remove corresponding sockets from self.send_sockets
+            // but tracking which socket belongs to which IP is tricky without a change to the struct.
+            // For now, dead sockets will just fail silently on send, which is acceptable.
+            // The critical part is un-registering the IP so we can re-add it if it comes back.
+
+            // 3. Add new interfaces
+            for iface in interfaces {
+                if !iface.is_loopback() {
+                    if let IpAddr::V4(ipv4) = iface.addr.ip() {
+                        // Check if we already know this interface
+                        if !self.known_interfaces.contains(&iface.addr.ip()) {
+                            println!("New interface detected (or re-detected): {}", ipv4);
+                            self.known_interfaces.insert(iface.addr.ip());
+
+                            // Join multicast group on existing receiving socket
+                            // Note: If the interface was removed and re-added, the OS kernel state for multicast membership might be lost for that interface.
+                            // Re-joining is safe.
+                            if let Err(e) = self.socket.join_multicast_v4(&multi_addr, &ipv4) {
+                                eprintln!(
+                                    "Failed to join multicast on new interface {}: {}",
+                                    ipv4, e
+                                );
+                            } else {
+                                println!("Joined multicast on {}", ipv4);
+                            }
+
+                            // Create NEW sending socket for this interface
+                            if let Ok(s) = UdpSocket::bind(SocketAddrV4::new(ipv4, 0)) {
+                                if let Err(e) = s.set_multicast_loop_v4(true) {
+                                    eprintln!(
+                                        "Failed to set multicast loop v4 on {:?}: {}",
+                                        ipv4, e
+                                    );
+                                }
+                                self.send_sockets.push(s);
+                                println!("Bound send socket to NEW interface: {}", ipv4);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
