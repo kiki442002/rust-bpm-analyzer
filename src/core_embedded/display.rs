@@ -178,7 +178,7 @@ pub mod display {
             Ok(BpmDisplay { display, icons })
         }
 
-        pub fn show_bpm(&mut self, bpm: f32) -> Result<(), Box<dyn std::error::Error>> {
+        pub fn show_bpm(&mut self, bpm: Option<f32>) -> Result<(), Box<dyn std::error::Error>> {
             // On efface la zone où le BPM est affiché pour éviter la superposition
             // Position (35, 45), Font 10x20. approx 60px de large pour "XXX.XX"
             embedded_graphics::primitives::Rectangle::new(Point::new(0, 25), Size::new(128, 25))
@@ -189,8 +189,10 @@ pub mod display {
                 .map_err(|e| format!("Clear rect error: {:?}", e))?;
 
             let style = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
-            let text = format!("{:.2}", bpm);
-
+            let text = match bpm {
+                Some(b) => format!("{:.2}", b),
+                None => String::from("***.**"),
+            };
             Text::new(&text, Point::new(35, 45), style)
                 .draw(&mut self.display)
                 .map_err(|e| format!("Draw error: {:?}", e))?;

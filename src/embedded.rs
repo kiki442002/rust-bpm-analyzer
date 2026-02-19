@@ -83,8 +83,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let network_manager = binding.ok();
 
-    let mut auto_gain_enabled = true; // Enabled by default
-    let mut analysis_enabled = true; // Enabled by default
+    let mut auto_gain_enabled = false; // Disabled by default
+    let mut analysis_enabled = false; // Disabled by default
 
     println!("Audio capture started. Listening... (Press Ctrl+C to stop)");
 
@@ -106,6 +106,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         println!("Network: SetAnalysis {}", val);
                         analysis_enabled = val;
                         let _ = net.send(NetworkMessage::AnalysisState(val));
+                        if !val {
+                            new_samples_accumulator.clear();
+                            if let Some(display_mutex) = &bpm_display {
+                                if let Ok(mut guard) = display_mutex.try_lock() {
+                                    let _ = guard.show_bpm(None); // Clear BPM display when analysis is disabled
+                                    let _ = guard.flush();
+                                }
+                            }
+                        }
                     }
                     NetworkMessage::Discovery => {
                         let _ = net.announce_presence(true);
@@ -180,7 +189,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(display_mutex) = &bpm_display {
                             // On tente de verrouiller le mutex sans bloquer l'audio
                             if let Ok(mut guard) = display_mutex.try_lock() {
-                                let _ = guard.show_bpm(result.bpm);
+                                let _ = guard.show_bpm(Some(result.bpm));
                             }
                         }
                     }
