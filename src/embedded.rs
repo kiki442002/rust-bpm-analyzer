@@ -15,7 +15,8 @@ use tokio::signal;
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Initialisation de la LED de statut
-    Led::new("/dev/gpiochip4", 2)?.on()?; // Allume une LED de statut
+    let led = Led::new("/dev/gpiochip4", 2)?;
+    led.off()?;
 
     // Initialisation de l'écran OLED
     let bpm_display: Option<_> = match BpmDisplay::new("/dev/i2c-2") {
@@ -26,23 +27,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Lancement de l'écoute des événements DHCP (si applicable)
-    #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
-    {
-        tokio::spawn(network::listen_interface_events(bpm_display.clone()));
-
-        // Lancement de l'écoute USB (script custom)
-        use crate::core_embedded::usb::usb;
-        tokio::spawn(usb::listen_usb_events());
-    }
-
-    // // Vérification et application d'une mise à jour si disponible (auto-update)
-    // let updater = Updater::new(
-    //     "kiki442002",        // Remplace par ton nom d'utilisateur GitHub si besoin
-    //     "rust-bpm-analyzer", // Nom du repo GitHub
-    //     "rust-bpm-analyzer", // Nom du binaire
-    // );
-    // let _ = updater.check_and_update();
+    tokio::spawn(network::listen_interface_events(bpm_display.clone()));
 
     // Variable d'arrêt partagée
     let stop_flag = Arc::new(AtomicBool::new(false));
@@ -59,6 +44,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mixer = Mixer::new("hw:0", false).map_err(|e: alsa::Error| e.to_string())?;
     let mut pid = AudioPID::new(15.0, 1.5, 0.0, 8, &mixer)?;
     let setpoint = 0.25; // Niveau cible RMS (à ajuster)
+    let setpoint_error_margin = 0.05; // Marge d'erreur pour éviter les oscillations
 
     let (sender, receiver) = mpsc::channel();
     let mut current_hop_size = TARGET_SAMPLE_RATE as usize / 2; // 0.5s par défaut, comme dans gui
@@ -109,11 +95,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         if !val {
                             new_samples_accumulator.clear();
                             if let Some(display_mutex) = &bpm_display {
-                                if let Ok(mut guard) = display_mutex.try_lock() {
+                                if let Ok(mut guard) = display_mutex.lock() {
                                     let _ = guard.show_bpm(None); // Clear BPM display when analysis is disabled
                                     let _ = guard.flush();
                                 }
                             }
+                            led.off()?;
+                        } else {
+                            led.on()?;
                         }
                     }
                     NetworkMessage::Discovery => {
@@ -170,6 +159,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 if !analysis_enabled {
                     new_samples_accumulator.clear();
                 } else if new_samples_accumulator.len() >= current_hop_size {
+                    let bpm;
                     if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
                         println!(
                             "BPM: {:.1} | Drop: {} | Conf: {:.2} | CoarseConf: {:.2}",
@@ -180,17 +170,17 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             result.is_drop,
                             result.beat_offset,
                         );
+                        bpm = result.bpm;
+
                         // Affichage BPM sur l'écran OLED si dispo
-                        #[cfg(all(
-                            any(target_arch = "aarch64", target_arch = "arm"),
-                            target_os = "linux"
-                        ))]
                         // L'écran est un Option<Arc<Mutex<BpmDisplay>>>
-                        if let Some(display_mutex) = &bpm_display {
-                            // On tente de verrouiller le mutex sans bloquer l'audio
-                            if let Ok(mut guard) = display_mutex.try_lock() {
-                                let _ = guard.show_bpm(Some(result.bpm));
-                            }
+                    } else {
+                        bpm = link_manager.get_tempo() as f32;
+                    }
+                    if let Some(display_mutex) = &bpm_display {
+                        // On tente de verrouiller le mutex sans bloquer l'audio
+                        if let Ok(mut guard) = display_mutex.try_lock() {
+                            let _ = guard.show_bpm(Some(bpm));
                         }
                     }
                     new_samples_accumulator.clear();
