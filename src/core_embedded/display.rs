@@ -12,7 +12,6 @@ pub mod display {
 
     mod assets {
         pub const ICON_USB: &[u8] = include_bytes!("../../assets/display_asset/USB-tiny.bmp");
-        pub const ICON_DHCP: &[u8] = include_bytes!("../../assets/display_asset/DHCP-tiny.bmp");
         pub const ICON_ETHERNET: &[u8] =
             include_bytes!("../../assets/display_asset/ethernet-tiny.bmp");
         pub const ICON_ETHERNET_INTERNET: &[u8] =
@@ -24,14 +23,12 @@ pub mod display {
     pub enum StatusBarIcon {
         Usb,
         Ethernet,
-        Dhcp,
         Internet,
         Update,
     }
 
     pub struct Icons {
         pub usb: Bmp<'static, BinaryColor>,
-        pub dhcp: Bmp<'static, BinaryColor>,
         pub ethernet: Bmp<'static, BinaryColor>,
         pub ethernet_internet: Bmp<'static, BinaryColor>,
         pub update: Bmp<'static, BinaryColor>,
@@ -41,7 +38,6 @@ pub mod display {
         pub fn new() -> Result<Self, String> {
             Ok(Self {
                 usb: Bmp::from_slice(assets::ICON_USB).map_err(|e| format!("{:?}", e))?,
-                dhcp: Bmp::from_slice(assets::ICON_DHCP).map_err(|e| format!("{:?}", e))?,
                 ethernet: Bmp::from_slice(assets::ICON_ETHERNET).map_err(|e| format!("{:?}", e))?,
                 ethernet_internet: Bmp::from_slice(assets::ICON_ETHERNET_INTERNET)
                     .map_err(|e| format!("{:?}", e))?,
@@ -107,12 +103,6 @@ pub mod display {
                         .draw(&mut self.display)
                         .map_err(|e| format!("{:?}", e))?;
                 }
-
-                StatusBarIcon::Dhcp => {
-                    Image::new(&self.icons.dhcp, Point::new(80, 8))
-                        .draw(&mut self.display)
-                        .map_err(|e| format!("{:?}", e))?;
-                }
             }
             Ok(())
         }
@@ -129,7 +119,6 @@ pub mod display {
             let point = match icon {
                 StatusBarIcon::Usb => Point::new(16, 8),
                 StatusBarIcon::Ethernet | StatusBarIcon::Internet => Point::new(48, 8),
-                StatusBarIcon::Dhcp => Point::new(80, 8),
                 StatusBarIcon::Update => Point::new(112, 8),
             };
 
