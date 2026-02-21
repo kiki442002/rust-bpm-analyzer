@@ -74,10 +74,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             bpm_display.clone(),
             network_manager.clone(),
         ));
-
-        // Lancement de l'écoute USB (script custom)
-        use crate::core_embedded::usb::usb;
-        tokio::spawn(usb::listen_usb_events());
     }
 
     let mut analysis_enabled = false; // Disabled by default
