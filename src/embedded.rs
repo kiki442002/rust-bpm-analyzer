@@ -27,8 +27,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    tokio::spawn(network::listen_interface_events(bpm_display.clone()));
-
     // Variable d'arrêt partagée
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_flag_ctrlc = stop_flag.clone();
@@ -67,58 +65,71 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(e) = &binding {
         eprintln!("Network Init Failed: {}", e);
     }
-    let network_manager = binding.ok();
+    let network_manager = binding.ok().map(|nm| Arc::new(Mutex::new(nm)));
 
-    let mut auto_gain_enabled = false; // Disabled by default
+    // Lancement de l'écoute des événements DHCP (si applicable)
+    #[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
+    {
+        tokio::spawn(network::listen_interface_events(
+            bpm_display.clone(),
+            network_manager.clone(),
+        ));
+
+        // Lancement de l'écoute USB (script custom)
+        use crate::core_embedded::usb::usb;
+        tokio::spawn(usb::listen_usb_events());
+    }
+
     let mut analysis_enabled = false; // Disabled by default
-
-    println!("Audio capture started. Listening... (Press Ctrl+C to stop)");
+    let mut auto_gain_enabled = false; // Disabled by default
+    let mut last_link_display_update = std::time::Instant::now();
 
     for msg in receiver {
         // --- Poll Network Messages ---
-        if let Some(net) = &network_manager {
-            while let Ok(cmd) = net.try_recv() {
-                if !matches!(cmd, NetworkMessage::EnergyLevel { .. }) {
-                    println!("Network Message Received: {:?}", cmd);
-                }
-                match cmd {
-                    NetworkMessage::SetAutoGain(val) => {
-                        println!("Network: SetAutoGain {}", val);
-                        auto_gain_enabled = val;
-                        let _ = net.announce_presence(true); // Should send current state too
-                        let _ = net.send(NetworkMessage::AutoGainState(val));
+        if let Some(net_arc) = &network_manager {
+            if let Ok(net) = net_arc.try_lock() {
+                while let Ok(cmd) = net.try_recv() {
+                    if !matches!(cmd, NetworkMessage::EnergyLevel { .. }) {
+                        println!("Network Message Received: {:?}", cmd);
                     }
-                    NetworkMessage::SetAnalysis(val) => {
-                        println!("Network: SetAnalysis {}", val);
-                        analysis_enabled = val;
-                        let _ = net.send(NetworkMessage::AnalysisState(val));
-                        if !val {
-                            new_samples_accumulator.clear();
-                            if let Some(display_mutex) = &bpm_display {
-                                if let Ok(mut guard) = display_mutex.lock() {
-                                    let _ = guard.show_bpm(None); // Clear BPM display when analysis is disabled
-                                    let _ = guard.flush();
+                    match cmd {
+                        NetworkMessage::SetAutoGain(val) => {
+                            println!("Network: SetAutoGain {}", val);
+                            auto_gain_enabled = val;
+                            let _ = net.announce_presence(true); // Should send current state too
+                            let _ = net.send(NetworkMessage::AutoGainState(val));
+                        }
+                        NetworkMessage::SetAnalysis(val) => {
+                            println!("Network: SetAnalysis {}", val);
+                            analysis_enabled = val;
+                            let _ = net.send(NetworkMessage::AnalysisState(val));
+                            if !val {
+                                new_samples_accumulator.clear();
+                                if let Some(display_mutex) = &bpm_display {
+                                    if let Ok(mut guard) = display_mutex.try_lock() {
+                                        let _ = guard.show_bpm(None);
+                                        let _ = guard.flush();
+                                    }
                                 }
                             }
-                            led.off()?;
-                        } else {
-                            led.on()?;
                         }
+                        NetworkMessage::Discovery => {
+                            let _ = net.announce_presence(true);
+                            let _ = net.send(NetworkMessage::AutoGainState(auto_gain_enabled));
+                            let _ = net.send(NetworkMessage::AnalysisState(analysis_enabled));
+                        }
+                        _ => {}
                     }
-                    NetworkMessage::Discovery => {
-                        let _ = net.announce_presence(true);
-                        let _ = net.send(NetworkMessage::AutoGainState(auto_gain_enabled));
-                        let _ = net.send(NetworkMessage::AnalysisState(analysis_enabled));
-                    }
-                    _ => {}
                 }
             }
         }
 
         if stop_flag.load(Ordering::SeqCst) {
             println!("Arrêt demandé, sortie de la boucle.");
-            if let Some(net) = &network_manager {
-                let _ = net.announce_presence(false);
+            if let Some(net_arc) = &network_manager {
+                if let Ok(net) = net_arc.lock() {
+                    let _ = net.announce_presence(false);
+                }
             }
             break;
         }
@@ -139,12 +150,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 // --- Send Energy Level ---
-                if let Some(net) = &network_manager {
+                if let Some(net_arc) = &network_manager {
                     // Send energy level to network
-                    let _ = net.send(NetworkMessage::EnergyLevel {
-                        id: device_id.clone(),
-                        level: rms,
-                    });
+                    // Use try_lock to avoid blocking audio process
+                    if let Ok(net) = net_arc.try_lock() {
+                        let _ = net.send(NetworkMessage::EnergyLevel {
+                            id: device_id.clone(),
+                            level: rms,
+                        });
+                    }
                 }
 
                 // --- Update Local Display ---

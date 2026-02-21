@@ -181,6 +181,8 @@ impl NetworkManager {
             // The critical part is un-registering the IP so we can re-add it if it comes back.
 
             // 3. Add new interfaces
+            let mut new_interface_found = false;
+
             for iface in interfaces {
                 if !iface.is_loopback() {
                     if let IpAddr::V4(ipv4) = iface.addr.ip() {
@@ -188,6 +190,7 @@ impl NetworkManager {
                         if !self.known_interfaces.contains(&iface.addr.ip()) {
                             println!("New interface detected (or re-detected): {}", ipv4);
                             self.known_interfaces.insert(iface.addr.ip());
+                            new_interface_found = true;
 
                             // Join multicast group on existing receiving socket
                             // Note: If the interface was removed and re-added, the OS kernel state for multicast membership might be lost for that interface.
@@ -214,6 +217,13 @@ impl NetworkManager {
                             }
                         }
                     }
+                }
+            }
+
+            if new_interface_found {
+                println!("New interface(s) initialized. Sending presence announcement...");
+                if let Err(e) = self.announce_presence(true) {
+                    eprintln!("Failed to announce presence after interface change: {}", e);
                 }
             }
         }

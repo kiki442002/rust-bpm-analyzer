@@ -2,6 +2,7 @@
 pub mod network {
     use crate::core_embedded::display::display::{BpmDisplay, StatusBarIcon};
     use crate::core_embedded::update::update::Updater;
+    use crate::network_sync::NetworkManager;
     use futures::StreamExt;
     use netlink_packet_core::NetlinkPayload;
     use netlink_packet_route::RouteNetlinkMessage;
@@ -17,7 +18,11 @@ pub mod network {
     // Flag statique pour empêcher l'exécution simultanée multiple
     static IS_CHECKING_UPDATE: AtomicBool = AtomicBool::new(false);
 
-    async fn check_internet_and_update(display: Option<Arc<Mutex<BpmDisplay>>>, updater: Updater) {
+    async fn check_internet_and_update(
+        display: Option<Arc<Mutex<BpmDisplay>>>,
+        updater: Updater,
+        network_manager: Option<Arc<Mutex<NetworkManager>>>,
+    ) {
         // Si une vérification est déjà en cours, on annule celle-ci
         if IS_CHECKING_UPDATE
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -44,6 +49,13 @@ pub mod network {
                 if output.status.success() {
                     success = true;
                     break;
+                }
+            }
+            // On a internet donc forcemment une IP, on met à jour les interfaces pour la découverte
+            if let Some(nm_arc) = &network_manager {
+                if let Ok(mut nm) = nm_arc.lock() {
+                    println!("Internet detected, updating discovery interfaces...");
+                    nm.check_for_new_interfaces();
                 }
             }
             // Petite pause
@@ -133,6 +145,7 @@ pub mod network {
     /// Écoute les changements d'état des interfaces réseau et affiche UP/DOWN
     pub async fn listen_interface_events(
         display: Option<Arc<Mutex<BpmDisplay>>>,
+        network_manager: Option<Arc<Mutex<NetworkManager>>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let (mut connection, handle, mut messages) = new_connection()?;
 
@@ -167,6 +180,7 @@ pub mod network {
                             tokio::spawn(check_internet_and_update(
                                 display.clone(),
                                 updater.clone(),
+                                network_manager.clone(),
                             ));
                         }
                         update_link_status(&display, &name, is_up);
@@ -203,9 +217,20 @@ pub mod network {
                             tokio::spawn(check_internet_and_update(
                                 display.clone(),
                                 updater.clone(),
+                                network_manager.clone(),
                             ));
                         }
                         update_link_status(&display, &name, is_up);
+
+                        // Notify NetworkManager about interface change
+                        if is_up {
+                            if let Some(nm_arc) = &network_manager {
+                                if let Ok(mut nm) = nm_arc.lock() {
+                                    println!("Refreshing network interfaces for discovery...");
+                                    nm.check_for_new_interfaces();
+                                }
+                            }
+                        }
                     } else {
                         // println!("DEBUG: Interface index {} changed but name unknown", link_msg.header.index);
                     }
