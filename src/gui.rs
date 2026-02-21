@@ -614,7 +614,7 @@ impl BpmApp {
         } else if let Some(bpm) = self.bpm {
             text(format!("{:.1}", bpm)).size(80)
         } else {
-            text("---.-").size(80).color([0.5, 0.5, 0.5])
+            text("***.**").size(80).color([0.5, 0.5, 0.5])
         };
 
         let label_text = text("BPM").size(20).color([0.6, 0.6, 0.6]);

@@ -165,7 +165,7 @@ impl NetworkManager {
             let mut current_interfaces = HashSet::new();
             for iface in &interfaces {
                 if !iface.is_loopback() {
-                    if let IpAddr::V4(ipv4) = iface.addr.ip() {
+                    if let IpAddr::V4(_) = iface.addr.ip() {
                         current_interfaces.insert(iface.addr.ip());
                     }
                 }
