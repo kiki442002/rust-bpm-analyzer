@@ -82,7 +82,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut analysis_enabled = false; // Disabled by default
     let mut auto_gain_enabled = false; // Disabled by default
-    let mut last_link_display_update = std::time::Instant::now();
 
     for msg in receiver {
         // --- Poll Network Messages ---
@@ -141,7 +140,23 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let mut rms = 0.0;
                 if auto_gain_enabled {
                     match pid.update_alsa_from_slice(setpoint, &packet, &mixer) {
-                        Ok((_, val)) => rms = val,
+                        Ok((alsa_gain, val)) => {
+                            rms = val;
+                            if (rms - setpoint).abs() < setpoint_error_margin {
+                                // Within margin, consider it as good enough to avoid oscillations
+                                // This can help stabilize the volume when it's close to the target
+                                // and prevent constant adjustments that can cause artifacts.
+                                network_manager.as_ref().and_then(|net_arc| {
+                                    net_arc
+                                        .try_lock()
+                                        .ok()
+                                        .map(|net| net.send(NetworkMessage::AutoGainState(false)))
+                                });
+                                auto_gain_enabled = false; // Disable auto-gain after adjustment to prevent oscillation
+                                pid.reset();
+                                println!("Auto-gain adjusted volume. Gain: {}", alsa_gain);
+                            }
+                        }
                         Err(e) => eprintln!("PID update error: {}", e),
                     }
                 } else {
