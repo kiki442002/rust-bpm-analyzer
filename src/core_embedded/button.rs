@@ -1,4 +1,4 @@
-#[cfg(all(any(target_arch = "aarch64", target_arch = "arm"), target_os = "linux"))]
+#[cfg(all(any(target_arch = "aarch64"), target_os = "linux"))]
 pub mod button {
     use futures::stream::StreamExt;
     use gpio_cdev::{AsyncLineEventHandle, Chip, EventRequestFlags, EventType, LineRequestFlags};
