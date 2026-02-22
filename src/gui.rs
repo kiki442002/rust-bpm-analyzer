@@ -15,6 +15,7 @@ use crate::platform::TARGET_SAMPLE_RATE;
 pub struct GuiUpdate {
     pub bpm: Option<f32>,
     pub num_peers: usize,
+    pub energy: f32, // Added energy
 }
 
 #[derive(Debug, Clone)]
@@ -343,6 +344,11 @@ impl BpmApp {
                     while let Ok(result) = rx.try_recv() {
                         self.bpm = result.bpm;
                         self.num_peers = result.num_peers;
+
+                        // Update energy if no remote peer
+                        if self.remote_peers.is_empty() {
+                            self.network_energy = result.energy;
+                        }
                     }
                 }
 
@@ -684,34 +690,37 @@ impl BpmApp {
             }
         });
 
-        let tap_btn = button(text("TAP").size(16).align_x(Horizontal::Center))
-            .on_press(Message::Tap)
-            .padding(10)
-            .width(iced::Length::Fixed(80.0))
-            .style(|theme: &'_ Theme, status| {
-                let palette = theme.palette();
-                let base = Color {
-                    a: 0.9,
-                    ..palette.success // Use success color (usually green/cyan) for TAP
-                };
+        let tap_btn = if self.is_enabled {
+            button(text("TAP").size(16).align_x(Horizontal::Center)).on_press(Message::Tap)
+        } else {
+            button(text("TAP").size(16).align_x(Horizontal::Center))
+        }
+        .padding(10)
+        .width(iced::Length::Fixed(80.0))
+        .style(|theme: &'_ Theme, status| {
+            let palette = theme.palette();
+            let base = Color {
+                a: 0.9,
+                ..palette.success // Use success color (usually green/cyan) for TAP
+            };
 
-                let background = match status {
-                    button::Status::Active => base,
-                    button::Status::Hovered => Color { a: 0.75, ..base },
-                    button::Status::Pressed => Color { a: 0.6, ..base },
-                    button::Status::Disabled => Color::from_rgb(0.4, 0.4, 0.4),
-                };
+            let background = match status {
+                button::Status::Active => base,
+                button::Status::Hovered => Color { a: 0.75, ..base },
+                button::Status::Pressed => Color { a: 0.6, ..base },
+                button::Status::Disabled => Color::from_rgb(0.4, 0.4, 0.4),
+            };
 
-                button::Style {
-                    background: Some(background.into()),
-                    text_color: Color::WHITE,
-                    border: iced::Border {
-                        radius: 15.0.into(),
-                        ..iced::Border::default()
-                    },
-                    ..button::Style::default()
-                }
-            });
+            button::Style {
+                background: Some(background.into()),
+                text_color: Color::WHITE,
+                border: iced::Border {
+                    radius: 15.0.into(),
+                    ..iced::Border::default()
+                },
+                ..button::Style::default()
+            }
+        });
 
         // MIDI Learn Button
         let learn_btn_text = if self.midi_learn {
@@ -882,6 +891,8 @@ fn run_analysis_loop(
     let mut analyzer = BpmAnalyzer::new(TARGET_SAMPLE_RATE, None)?;
     let mut bpm_history: std::collections::VecDeque<f32> =
         std::collections::VecDeque::with_capacity(5);
+    let mut last_bpm = None;
+    let mut last_energy = 0.0;
 
     let mut link_manager = LinkManager::new();
 
@@ -945,11 +956,20 @@ fn run_analysis_loop(
         }
 
         // Use recv_timeout to allow checking commands and updating UI even if no audio comes in
-        match receiver.recv_timeout(Duration::from_millis(50)) {
+        match receiver.recv_timeout(Duration::from_millis(30)) {
             Ok(AudioMessage::Samples(packet)) => {
                 if is_enabled {
+                    // Update instant energy for visualization
+                    let sum_sq: f32 = packet.iter().map(|&s| s * s).sum();
+                    if !packet.is_empty() {
+                        last_energy = (sum_sq / packet.len() as f32).sqrt();
+                        // Amplify for display if needed
+                        last_energy *= 5.0;
+                    }
+
                     new_samples_accumulator.extend(packet);
 
+                    // Check if we need to run analysis
                     if new_samples_accumulator.len() >= current_hop_size {
                         if let Ok(Some(result)) = analyzer.process(&new_samples_accumulator) {
                             // Update history for moving average
@@ -962,12 +982,7 @@ fn run_analysis_loop(
                             let avg_bpm: f32 =
                                 bpm_history.iter().sum::<f32>() / bpm_history.len() as f32;
 
-                            let bpm_to_send = Some(avg_bpm);
-                            // Send update to GUI
-                            let _ = tx.send(GuiUpdate {
-                                bpm: bpm_to_send,
-                                num_peers: link_manager.num_peers(),
-                            });
+                            last_bpm = Some(avg_bpm);
 
                             // Sync Ableton Link
                             // Use the averaged BPM for sync
@@ -976,19 +991,31 @@ fn run_analysis_loop(
                                 result.is_drop,
                                 result.beat_offset,
                             );
-                            println!(
-                                "Avg BPM: {:.1} | Raw BPM: {:.1} | Conf: {:.2}",
-                                avg_bpm, result.bpm, result.confidence
-                            );
+
+                            // Log BPM found but don't force UI update here just for log, let the timer handle GUI
+                            // Or force it if BPM changed significantly? Timer is enough (50ms).
                         }
 
-                        last_ui_update = Instant::now();
-
                         new_samples_accumulator.clear();
+                    }
+
+                    // Send UI update if enough time passed (approx 30fps)
+                    if last_ui_update.elapsed() > Duration::from_millis(33) {
+                        // Always get Link current tempo - it should track what we just set or what others set
+                        let lb = link_manager.get_tempo();
+                        let current_bpm = if lb > 0.0 { Some(lb as f32) } else { last_bpm };
+
+                        let _ = tx.send(GuiUpdate {
+                            bpm: current_bpm,
+                            num_peers: link_manager.num_peers(),
+                            energy: last_energy,
+                        });
+                        last_ui_update = Instant::now();
                     }
                 } else {
                     // Drain any remaining samples if disabled but still receiving
                     new_samples_accumulator.clear();
+                    last_energy = 0.0;
                 }
             }
             Ok(AudioMessage::Reset) => {
@@ -1020,10 +1047,13 @@ fn run_analysis_loop(
 
         // Periodic UI update (for peer count) if we haven't sent one recently
         if last_ui_update.elapsed() > Duration::from_millis(200) {
-            let link_bpm = link_manager.get_tempo();
+            let lb = link_manager.get_tempo();
+            let current_bpm = if lb > 0.0 { Some(lb as f32) } else { last_bpm };
+
             let _ = tx.send(GuiUpdate {
-                bpm: Some(link_bpm as f32), // Send Link BPM instead of None
+                bpm: current_bpm,
                 num_peers: link_manager.num_peers(),
+                energy: last_energy,
             });
             last_ui_update = Instant::now();
         }
