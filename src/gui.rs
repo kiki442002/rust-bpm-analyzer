@@ -304,14 +304,13 @@ impl BpmApp {
 
                     // Check for timeouts (1000ms) and remove peers
                     let now = Instant::now();
-                    let had_peers = !self.remote_peers.is_empty();
 
                     self.remote_peers.retain(|_, (_, last_seen)| {
                         now.duration_since(*last_seen) < Duration::from_millis(1000)
                     });
 
                     // Detection auto-disable if all peers are lost
-                    if had_peers && self.remote_peers.is_empty() {
+                    if self.remote_peers.is_empty() {
                         println!("Remote device disconnected. Disabling detection.");
                         self.network_energy = 0.0;
                         // If we were enabled (Remote Analysis mode), we disable everything
@@ -469,11 +468,8 @@ impl BpmApp {
                     if self.is_enabled { "ON" } else { "OFF" }
                 );
 
-                // Check if we have remote peers
-                let has_peers = !self.remote_peers.is_empty();
-
                 // If remote peers are connected, send command to them
-                if has_peers {
+                if !self.remote_peers.is_empty() {
                     if let Some(manager) = &self.network_manager {
                         println!("Sending SetAnalysis({}) to remote peers", self.is_enabled);
                         let _ = manager.send(NetworkMessage::SetAnalysis(self.is_enabled));
