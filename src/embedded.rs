@@ -61,7 +61,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Network Sync
     let device_id = "embedded_milkv".to_string();
-    let binding = NetworkManager::new(device_id.clone(), "Milk-V DUOs".to_string());
+    let binding = NetworkManager::new(device_id.clone(), "Milk-V DUO".to_string());
     if let Err(e) = &binding {
         eprintln!("Network Init Failed: {}", e);
     }
@@ -111,6 +111,13 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         NetworkMessage::Presence { id, name, online } => {
                             let _ = net.send(NetworkMessage::AutoGainState(auto_gain_enabled));
                             let _ = net.send(NetworkMessage::AnalysisState(analysis_enabled));
+                            if (id != device_id) {
+                                let _ = net.send(NetworkMessage::Presence {
+                                    id: device_id.clone(),
+                                    name: "Milk-V DUOs".to_string(),
+                                    online: true,
+                                });
+                            }
                         }
                         NetworkMessage::Discovery => {
                             let _ = net.send(NetworkMessage::Presence {
