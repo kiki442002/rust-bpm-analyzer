@@ -108,10 +108,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
-                        NetworkMessage::Discovery => {
-                            let _ = net.announce_presence(true);
+                        NetworkMessage::Presence { id, name, online } => {
                             let _ = net.send(NetworkMessage::AutoGainState(auto_gain_enabled));
                             let _ = net.send(NetworkMessage::AnalysisState(analysis_enabled));
+                        }
+                        NetworkMessage::Discovery => {
+                            let _ = net.send(NetworkMessage::Presence {
+                                id: device_id.clone(),
+                                name: "Milk-V DUOs".to_string(),
+                                online: true,
+                            });
                         }
                         _ => {}
                     }
