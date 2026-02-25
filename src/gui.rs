@@ -279,31 +279,12 @@ impl BpmApp {
                                 } else {
                                     self.remote_peers.remove(&id);
                                 }
+                                let _ = manager.send(NetworkMessage::Discovery);
                             }
                             NetworkMessage::EnergyLevel { id, level } => {
                                 // Update presence for this peer
                                 if let Some((_, last_seen)) = self.remote_peers.get_mut(&id) {
                                     *last_seen = Instant::now();
-                                } else {
-                                    // If we receive energy from an unknown peer, we add it with a default name or just wait for Presence?
-                                    // The user said "use energy as heartbeat". If we haven't seen Presence yet, we might not know the name.
-                                    // But typically Presence is sent on start. If we miss it and only get Energy, we should probably add it.
-                                    // However, without a name, it's tricky. Let's try to keep it simple: if known, update time.
-                                    // Actually, if we miss the Presence packet (UDP), we might never see the peer.
-                                    // Maybe we should auto-add if missing? But with what name?
-                                    // Let's stick to updating existing peers for now. The device sends Presence on startup anyway.
-                                    // Wait, if we stop sending Discovery, how does the desktop know about the device if the desktop starts AFTER the device?
-                                    // The device needs to send Presence periodically or respond to *something*.
-                                    // BUT the user said "remove Discovery msg there are too many".
-                                    // If I remove Discovery from Desktop, the Embedded device needs to send Presence or Energy periodically.
-                                    // Embedded ALREADY sends Energy periodically.
-                                    // So if Desktop starts late, it will receive Energy.
-                                    // If I don't add the peer on Energy, the Desktop won't show it until it restarts or sends Presence.
-                                    // Maybe I should add it with a placeholder name like "Unknown Device"?
-                                    self.remote_peers
-                                        .entry(id.clone())
-                                        .and_modify(|(_, last_seen)| *last_seen = Instant::now())
-                                        .or_insert(("Unknown Device".to_string(), Instant::now()));
                                 }
                                 self.network_energy = level;
                             }
@@ -311,6 +292,12 @@ impl BpmApp {
                                 self.remote_auto_gain = state;
                                 // If we receive status updates, perhaps update all peers as alive?
                                 // Safer to stick to Presence.
+                            }
+                            NetworkMessage::AnalysisState(state) => {
+                                // Handle analysis state update
+                                // Update local state based on the received analysis state
+                                self.is_enabled = state;
+                                let _ = self.sender.send(GuiCommand::SetLinkOnly(state));
                             }
                             _ => {}
                         }
@@ -476,6 +463,7 @@ impl BpmApp {
                 self.is_enabled = !self.is_enabled;
                 if !self.is_enabled {
                     self.bpm = None;
+                    self.network_energy = 0.0;
                 }
                 println!(
                     "Detection toggled: {}",
@@ -927,6 +915,8 @@ fn run_analysis_loop(
                         }
                         new_samples_accumulator.clear();
                         bpm_history.clear();
+                        last_energy = 0.0;
+                        last_bpm = None;
                     }
                 }
                 GuiCommand::SetLinkOnly(enabled) => {
@@ -939,6 +929,8 @@ fn run_analysis_loop(
                         audio_capture = None;
                     }
                     new_samples_accumulator.clear();
+                    last_energy = 0.0;
+                    last_bpm = None;
                 }
                 GuiCommand::SetDevice(device_name) => {
                     println!("Switching device to: {:?}", device_name);
