@@ -279,7 +279,6 @@ impl BpmApp {
                                 } else {
                                     self.remote_peers.remove(&id);
                                 }
-                                let _ = manager.send(NetworkMessage::Discovery);
                             }
                             NetworkMessage::EnergyLevel { id, level } => {
                                 // Update presence for this peer
